@@ -144,3 +144,7 @@ chmod +x scripts/setup-budgets.sh
   tearing down prod.
 - Always deploy `heediq-infra` before deploying app repos when a change adds new AWS resources
   (D-050). App repos reference resource names via SSM params, not hardcoded ARNs.
+- **OIDC trust policy `sub` must use a wildcard ref** — `repo:heediq/heediq-infra:*` with
+  `StringLike`. Do NOT lock to a branch (`ref:refs/heads/develop`) — that breaks PRs and
+  feature-branch synths. Do NOT use the old org name `admin-heediq`. Run
+  `claude-workspace/scripts/setup-aws-oidc.sh` to fix all accounts at once.
