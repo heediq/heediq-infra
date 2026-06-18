@@ -112,6 +112,28 @@ After that, workload deploys run normally via CI.
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
 
+## Scripts (one-time setup, not CDK)
+
+| Script | Purpose |
+|---|---|
+| `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account in the management account. Run once after configuring the `heediq-management` SSO profile. |
+
+### `heediq-management` SSO profile setup (one-time)
+
+```bash
+aws configure sso --profile heediq-management
+# SSO start URL → from IAM Identity Center in management account
+# SSO region    → eu-west-1
+
+aws sso login --profile heediq-management  # run before each script session
+```
+
+Then run:
+```bash
+chmod +x scripts/setup-budgets.sh
+./scripts/setup-budgets.sh
+```
+
 ## Gotchas
 
 - CloudFront ACM cert **must** be provisioned in `us-east-1`, even though all other resources are
