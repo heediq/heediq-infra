@@ -1,0 +1,156 @@
+name: Deploy Infrastructure
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deploy target'
+        required: true
+        default: 'shared-services'
+        type: choice
+        options: [shared-services]
+
+env:
+  AWS_REGION: eu-west-1
+  NODE_VERSION: '22'
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Synth (validate without deploying)
+        run: pnpm cdk synth -c env=dev --quiet
+
+  deploy-shared-services:
+    name: Deploy → shared-services
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'shared-services'
+    needs: [typecheck]
+    runs-on: ubuntu-latest
+    environment: shared-services
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure AWS credentials (shared-services)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::313828097088:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy shared-services
+        run: pnpm cdk deploy -c env=shared --require-approval never
+
+  deploy-dev:
+    name: Deploy → dev
+    needs: [typecheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure AWS credentials (dev)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::276594885933:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy to dev
+        run: pnpm cdk deploy --all -c env=dev --require-approval never
+
+  deploy-staging:
+    name: Deploy → staging
+    needs: [typecheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::475790160542:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy to staging
+        run: pnpm cdk deploy --all -c env=staging --require-approval never
+
+  approve-prod:
+    name: Approve → prod
+    needs: [deploy-staging]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approved
+        run: echo "Production deployment approved"
+
+  deploy-prod:
+    name: Deploy → prod
+    needs: [approve-prod]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure AWS credentials (prod)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::438825592314:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy to prod
+        run: pnpm cdk deploy --all -c env=prod --require-approval never
