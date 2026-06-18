@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { ACCOUNTS, AWS_REGION, WorkloadEnv } from '../lib/config';
+import { ACCOUNTS, AWS_REGION, CERT_REGION, WorkloadEnv } from '../lib/config';
 import { SharedServicesStack } from '../lib/shared-services/shared-services-stack';
+import { SharedServicesCfCertStack } from '../lib/shared-services/shared-services-cf-cert-stack';
 import { FoundationStack } from '../lib/foundation/foundation-stack';
 import { ApiStack } from '../lib/api/api-stack';
 import { WebStack } from '../lib/web/web-stack';
@@ -16,9 +17,19 @@ if (!targetEnv) {
 }
 
 if (targetEnv === 'shared') {
-  new SharedServicesStack(app, 'HeediqSharedServicesStack', {
+  // crossRegionReferences: true lets CDK pass the hosted zone construct from eu-west-1
+  // to the us-east-1 cert stack automatically via SSM-backed cross-region references.
+  const sharedStack = new SharedServicesStack(app, 'HeediqSharedServicesStack', {
     env: { account: ACCOUNTS.sharedServices, region: AWS_REGION },
     terminationProtection: true,
+    crossRegionReferences: true,
+  });
+
+  new SharedServicesCfCertStack(app, 'HeediqSharedServicesCfCertStack', {
+    env: { account: ACCOUNTS.sharedServices, region: CERT_REGION },
+    terminationProtection: true,
+    crossRegionReferences: true,
+    hostedZone: sharedStack.hostedZone,
   });
 } else {
   const validWorkloadEnvs: WorkloadEnv[] = ['dev', 'staging', 'prod'];

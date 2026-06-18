@@ -1,25 +1,111 @@
 import * as cdk from 'aws-cdk-lib';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import { ACCOUNTS, DOMAINS } from '../config';
 
 export class SharedServicesStack extends cdk.Stack {
+  readonly hostedZone: route53.PublicHostedZone;
+  readonly certEuWest1: acm.Certificate;
+  readonly transcriptionRepo: ecr.Repository;
+
   constructor(scope: Construct, id: string, props: cdk.StackProps) {
     super(scope, id, props);
 
-    // TODO: ECR repositories — one per container image (heediq-worker-transcription)
+    // ── ECR — transcription worker image registry ──────────────────────────────
+    // Build once in shared-services, pull into dev/staging/prod by image tag (D-047).
 
-    // TODO: Route 53 public hosted zone for heediq.com (D-051)
+    this.transcriptionRepo = new ecr.Repository(this, 'TranscriptionRepo', {
+      repositoryName: 'heediq-worker-transcription',
+      imageScanOnPush: true,
+      lifecycleRules: [
+        {
+          description: 'Remove untagged layers after 1 day',
+          tagStatus: ecr.TagStatus.UNTAGGED,
+          maxImageAge: cdk.Duration.days(1),
+        },
+        {
+          description: 'Keep last 20 sha-tagged images',
+          tagStatus: ecr.TagStatus.TAGGED,
+          tagPrefixList: ['sha-'],  // D-047: images tagged sha-<7chars>
+          maxImageCount: 20,
+        },
+      ],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
 
-    // TODO: ACM wildcard cert in eu-west-1 for API Gateway (D-053)
-    //   Covers: heediq.com + *.heediq.com
-    //   DNS validation via Route 53 hosted zone above
+    // Allow workload accounts to pull images (push is via GitHubActionsDeployRole in same account)
+    this.transcriptionRepo.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowWorkloadAccountPull',
+      principals: [
+        new iam.AccountPrincipal(ACCOUNTS.dev),
+        new iam.AccountPrincipal(ACCOUNTS.staging),
+        new iam.AccountPrincipal(ACCOUNTS.prod),
+      ],
+      actions: [
+        'ecr:GetDownloadUrlForLayer',
+        'ecr:BatchGetImage',
+        'ecr:BatchCheckLayerAvailability',
+      ],
+    }));
 
-    // TODO: ACM wildcard cert in us-east-1 for CloudFront (D-053)
-    //   Must be a cross-region resource (cdk.aws_certificatemanager via us-east-1 env)
-    //   Covers: heediq.com + *.heediq.com
+    // ── Route 53 — primary hosted zone (D-051) ────────────────────────────────
+    // After first deploy, update NS records at domain registrar using NameServers output.
 
-    // TODO: Output cert ARNs + hosted zone ID to SSM params for cross-account lookup (D-038)
-    //   /heediq/shared/hosted-zone-id
-    //   /heediq/shared/cert-arn-eu-west-1
-    //   /heediq/shared/cert-arn-us-east-1
+    this.hostedZone = new route53.PublicHostedZone(this, 'HostedZone', {
+      zoneName: DOMAINS.root,
+      comment: 'heediq.com primary hosted zone — D-051',
+    });
+    // Never delete: removing a hosted zone breaks all DNS; must be done manually if ever needed
+    (this.hostedZone.node.defaultChild as cdk.CfnResource)
+      .applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    // ── ACM — wildcard cert eu-west-1 for API Gateway (D-053) ─────────────────
+
+    this.certEuWest1 = new acm.Certificate(this, 'WildcardCertEuWest1', {
+      domainName: DOMAINS.root,
+      subjectAlternativeNames: [`*.${DOMAINS.root}`],
+      validation: acm.CertificateValidation.fromDns(this.hostedZone),
+    });
+    // Note: validation will stay PENDING until NS records are updated at registrar
+
+    // ── SSM params — for audit; workload stacks read from config.ts after first deploy ──
+
+    new ssm.StringParameter(this, 'HostedZoneIdParam', {
+      parameterName: '/heediq/shared/hosted-zone-id',
+      stringValue: this.hostedZone.hostedZoneId,
+      description: 'Route 53 hosted zone ID for heediq.com',
+    });
+
+    new ssm.StringParameter(this, 'CertArnEuWest1Param', {
+      parameterName: '/heediq/shared/cert-arn-eu-west-1',
+      stringValue: this.certEuWest1.certificateArn,
+      description: 'ACM wildcard cert ARN for API Gateway (eu-west-1) — D-053',
+    });
+
+    // ── Outputs — capture these after first deploy ─────────────────────────────
+
+    new cdk.CfnOutput(this, 'NameServers', {
+      value: cdk.Fn.join(', ', this.hostedZone.hostedZoneNameServers!),
+      description: 'ACTION REQUIRED: update these NS records at your domain registrar',
+    });
+
+    new cdk.CfnOutput(this, 'HostedZoneId', {
+      value: this.hostedZone.hostedZoneId,
+      description: 'Add to config.ts SHARED_SERVICES.hostedZoneId',
+    });
+
+    new cdk.CfnOutput(this, 'CertArnEuWest1', {
+      value: this.certEuWest1.certificateArn,
+      description: 'Add to config.ts SHARED_SERVICES.certArnEuWest1',
+    });
+
+    new cdk.CfnOutput(this, 'EcrRepoUri', {
+      value: this.transcriptionRepo.repositoryUri,
+      description: 'ECR URI for heediq-worker-transcription — use in ECS task definitions',
+    });
   }
 }

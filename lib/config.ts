@@ -24,6 +24,14 @@ export const DOMAINS = {
   } satisfies Record<WorkloadEnv, string>,
 } as const;
 
+// Populated after SharedServicesStack + SharedServicesCfCertStack first deploy.
+// Capture values from CloudFormation outputs, fill in below, and commit.
+export const SHARED_SERVICES = {
+  hostedZoneId:   '',  // CfnOutput: HeediqSharedServicesStack.HostedZoneId
+  certArnEuWest1: '',  // CfnOutput: HeediqSharedServicesStack.CertArnEuWest1
+  certArnUsEast1: '',  // CfnOutput: HeediqSharedServicesCfCertStack.CertArnUsEast1
+} as const;
+
 // D-055 — all environments use identical sizing at launch; scale when metrics demand it
 export const COMPUTE = {
   lambda: {
