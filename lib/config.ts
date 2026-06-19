@@ -32,6 +32,12 @@ export const SHARED_SERVICES = {
   certArnUsEast1: '',  // CfnOutput: HeediqSharedServicesCfCertStack.CertArnUsEast1
 } as const;
 
+// Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
+// Leave zohoDkimKey empty until retrieved; the stack skips the DKIM record until it's set.
+export const EMAIL = {
+  zohoDkimKey: '', // e.g. "v=DKIM1; k=rsa; p=<key>"
+} as const;
+
 // D-055 — all environments use identical sizing at launch; scale when metrics demand it
 export const COMPUTE = {
   lambda: {

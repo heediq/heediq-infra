@@ -5,7 +5,7 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { ACCOUNTS, DOMAINS } from '../config';
+import { ACCOUNTS, DOMAINS, EMAIL } from '../config';
 
 export class SharedServicesStack extends cdk.Stack {
   readonly hostedZone: route53.PublicHostedZone;
@@ -62,6 +62,40 @@ export class SharedServicesStack extends cdk.Stack {
     // Never delete: removing a hosted zone breaks all DNS; must be done manually if ever needed
     (this.hostedZone.node.defaultChild as cdk.CfnResource)
       .applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    // ── Email — Zoho EU DNS records ───────────────────────────────────────────
+
+    new route53.MxRecord(this, 'EmailMx', {
+      zone: this.hostedZone,
+      values: [
+        { hostName: 'mx.zoho.eu.', priority: 10 },
+        { hostName: 'mx2.zoho.eu.', priority: 20 },
+        { hostName: 'mx3.zoho.eu.', priority: 50 },
+      ],
+      ttl: cdk.Duration.hours(1),
+    });
+
+    new route53.TxtRecord(this, 'EmailSpf', {
+      zone: this.hostedZone,
+      values: ['v=spf1 include:zoho.eu ~all'],
+      ttl: cdk.Duration.hours(1),
+    });
+
+    new route53.TxtRecord(this, 'EmailDmarc', {
+      zone: this.hostedZone,
+      recordName: '_dmarc',
+      values: ['v=DMARC1; p=none; rua=mailto:dmarc@heediq.com'],
+      ttl: cdk.Duration.hours(1),
+    });
+
+    if (EMAIL.zohoDkimKey) {
+      new route53.TxtRecord(this, 'EmailDkim', {
+        zone: this.hostedZone,
+        recordName: 'zoho._domainkey',
+        values: [EMAIL.zohoDkimKey],
+        ttl: cdk.Duration.hours(1),
+      });
+    }
 
     // ── ACM — wildcard cert eu-west-1 for API Gateway (D-053) ─────────────────
 
