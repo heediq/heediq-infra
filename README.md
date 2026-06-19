@@ -91,55 +91,33 @@ Use the local AWS CLI profile for the target account (D-045):
 | staging | `heediq-staging` |
 | prod | `heediq-prod` |
 
-## Bootstrap (one-time, per account)
+## Initial Setup (one-time)
 
-Before first deploy, each account needs CDK bootstrap and the OIDC deploy role.
+Run **`scripts/setup.sh`** from anywhere — it handles everything in order:
 
-### 1. Bootstrap CDK
-
-The app entry requires `-c env=` — include it on every `cdk` command, even `bootstrap`.
+1. CDK bootstrap (all 4 accounts, correct regions — shared-services gets both `eu-west-1` and `us-east-1` for the CloudFront cert stack)
+2. GitHub Actions OIDC providers in every account
+3. IAM roles: `GitHubActionsDeployRole` (all 4 accounts, trusts `heediq-infra` only) and `GitHubActionsECRRole` (shared-services, trusts all heediq repos)
 
 ```bash
-# Workload accounts — eu-west-1 only
-pnpm cdk bootstrap aws://276594885933/eu-west-1 --profile heediq-dev     -c env=dev
-pnpm cdk bootstrap aws://475790160542/eu-west-1 --profile heediq-staging  -c env=dev
-pnpm cdk bootstrap aws://438825592314/eu-west-1 --profile heediq-prod     -c env=dev
+# SSO login first
+aws sso login --profile heediq-shared
+aws sso login --profile heediq-dev
+aws sso login --profile heediq-staging
+aws sso login --profile heediq-prod
 
-# Shared-services account — BOTH regions (eu-west-1 for main stacks, us-east-1 for CloudFront cert)
-pnpm cdk bootstrap aws://313828097088/eu-west-1 --profile heediq-shared -c env=shared
-pnpm cdk bootstrap aws://313828097088/us-east-1 --profile heediq-shared -c env=shared
+bash scripts/setup.sh
 ```
 
-### 2. Create OIDC IAM roles in each account
+Idempotent — safe to re-run. The script prints the GitHub Actions org-level variable values at the end.
 
-Two roles are needed. Both are created by **`claude-workspace/scripts/setup-aws-oidc.sh`** —
-run that script (idempotent, safe to re-run):
-
-| Role | Accounts | Trusts | Policy |
-|---|---|---|---|
-| `GitHubActionsDeployRole` | shared-services + dev + staging + prod | `repo:heediq/heediq-infra:*` | `AdministratorAccess` |
-| `GitHubActionsECRRole` | shared-services only | `repo:heediq/*:*` | scoped ECR push policy (heediq-* repos) |
-
-`GitHubActionsDeployRole` is scoped to `heediq-infra` only — no other repo can trigger CDK deploys.
-`GitHubActionsECRRole` trusts all heediq repos so any app repo can push images to ECR in shared-services.
-
-Trust policy `sub` must use `StringLike` with a wildcard ref (`repo:heediq/…:*`) — never lock
-to a branch (`ref:refs/heads/develop`), that breaks PRs and `workflow_dispatch`.
-
-### 3. Deploy shared-services first
-
-Trigger the `workflow_dispatch` on `deploy-shared-services.yml` (GitHub Actions UI or CLI):
+After setup, trigger the shared-services deploy and follow its output:
 
 ```bash
 gh workflow run deploy-shared-services.yml --repo heediq/heediq-infra --ref develop
 ```
 
-This provisions ECR, the Route 53 hosted zone, and ACM certs (both regions). After it completes:
-- Capture `HostedZoneId`, `CertArnEuWest1`, `CertArnUsEast1` from CloudFormation outputs
-- Update NS records at the domain registrar (from the `NameServers` output) — required for ACM validation
-- Fill `lib/config.ts` → `SHARED_SERVICES` fields and commit
-
-Workload deploys run normally via CI after shared-services is up.
+Once it succeeds: capture CloudFormation outputs, fill `lib/config.ts` → `SHARED_SERVICES` fields, update NS records at the domain registrar. Workload CI runs automatically after that.
 
 ## Contracts
 
@@ -149,27 +127,22 @@ Workload deploys run normally via CI after shared-services is up.
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
 
-## Scripts (one-time setup, not CDK)
+## Scripts
 
-| Script | Location | Purpose |
-|---|---|---|
-| `setup-aws-oidc.sh` | `claude-workspace/scripts/` | Creates OIDC providers + `GitHubActionsDeployRole` (all 4 accounts) + `GitHubActionsECRRole` (shared-services). Run once after CDK bootstrap. Idempotent. |
-| `setup-budgets.sh` | `scripts/` (this repo) | Creates $50/month cost budgets for the dev account via the management account. Run once after configuring the `heediq-management` SSO profile. |
+| Script | Purpose |
+|---|---|
+| `scripts/setup.sh` | One-time AWS setup: CDK bootstrap + OIDC providers + IAM roles. Run before first deploy. Idempotent. |
+| `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account via the management account. |
 
-### `heediq-management` SSO profile setup (one-time)
+`setup-budgets.sh` requires the `heediq-management` SSO profile:
 
 ```bash
 aws configure sso --profile heediq-management
 # SSO start URL → from IAM Identity Center in management account
 # SSO region    → eu-west-1
 
-aws sso login --profile heediq-management  # run before each script session
-```
-
-Then run:
-```bash
-chmod +x scripts/setup-budgets.sh
-./scripts/setup-budgets.sh
+aws sso login --profile heediq-management
+bash scripts/setup-budgets.sh
 ```
 
 ## Gotchas
