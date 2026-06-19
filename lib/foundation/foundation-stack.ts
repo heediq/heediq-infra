@@ -1,6 +1,13 @@
 import * as cdk from 'aws-cdk-lib';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ses from 'aws-cdk-lib/aws-ses';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv } from '../config';
+import { WorkloadEnv, DOMAINS } from '../config';
 
 export interface FoundationStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
@@ -9,34 +16,285 @@ export interface FoundationStackProps extends cdk.StackProps {
 export class FoundationStack extends cdk.Stack {
   readonly workloadEnv: WorkloadEnv;
 
+  // DynamoDB — multi-table (D-031)
+  readonly recordingsTable: dynamodb.Table;
+  readonly orgsTable: dynamodb.Table;
+  readonly usersTable: dynamodb.Table;
+  readonly jobsTable: dynamodb.Table;
+
+  // S3
+  readonly audioUploadsBucket: s3.Bucket;
+  readonly webAssetsBucket: s3.Bucket;
+
+  // SQS
+  readonly transcriptionQueue: sqs.Queue;
+
+  // Cognito
+  readonly userPool: cognito.UserPool;
+  readonly userPoolClient: cognito.UserPoolClient;
+
   constructor(scope: Construct, id: string, props: FoundationStackProps) {
     super(scope, id, props);
     this.workloadEnv = props.workloadEnv;
 
-    // TODO: DynamoDB tables — PAY_PER_REQUEST in all envs (D-055, D-031)
-    //   heediq-recordings  (PK: orgId, SK: recordingId)
-    //   heediq-orgs        (PK: orgId)
-    //   heediq-users       (PK: userId, GSI: orgId)
-    //   heediq-jobs        (transcription job status; PK: jobId)
+    const isProd = props.workloadEnv === 'prod';
+    const removalPolicy = isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
-    // TODO: S3 buckets
-    //   heediq-audio-uploads  — presigned URL direct upload, S3 event → SQS (D-023)
-    //   heediq-web-assets     — CloudFront origin for the PWA
+    // ── DynamoDB — multi-table, PAY_PER_REQUEST, PITR on all (D-031, D-055, D-021) ──
 
-    // TODO: SQS queues
-    //   heediq-transcription  — triggers Fargate Spot RunTask via EventBridge Pipes (D-023)
+    this.recordingsTable = new dynamodb.Table(this, 'RecordingsTable', {
+      tableName: 'heediq-recordings',
+      partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+    // Admin list: all org recordings, time-sorted
+    this.recordingsTable.addGlobalSecondaryIndex({
+      indexName: 'by-org-created',
+      partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+    });
+    // Member view: own recordings, time-sorted (D-021 row-level isolation)
+    this.recordingsTable.addGlobalSecondaryIndex({
+      indexName: 'by-user-created',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+    });
 
-    // TODO: Cognito User Pool + App Client (D-020)
-    //   Email/password + Google + Microsoft (Entra) federated IdPs
-    //   Email-domain match "request to join" flow (admin approval required)
+    this.orgsTable = new dynamodb.Table(this, 'OrgsTable', {
+      tableName: 'heediq-orgs',
+      partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+    // Email-domain match for "request to join" flow (D-020)
+    this.orgsTable.addGlobalSecondaryIndex({
+      indexName: 'by-email-domain',
+      partitionKey: { name: 'emailDomain', type: dynamodb.AttributeType.STRING },
+    });
 
-    // TODO: SES sending identity (noreply@heediq.com) + DKIM/SPF/DMARC (D-054)
+    this.usersTable = new dynamodb.Table(this, 'UsersTable', {
+      tableName: 'heediq-users',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+    // Org membership queries (admin seat management, D-017)
+    this.usersTable.addGlobalSecondaryIndex({
+      indexName: 'by-org',
+      partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+    });
 
-    // TODO: SSM params — export all resource names/ARNs (D-038)
-    //   /heediq/api/recordings-table-name
-    //   /heediq/api/audio-bucket-name
-    //   /heediq/api/transcription-queue-url
-    //   /heediq/api/cognito-user-pool-id
-    //   /heediq/api/cognito-client-id
+    // PK = recordingId — client polls by recordingId; one active job per recording at MVP (D-023)
+    this.jobsTable = new dynamodb.Table(this, 'JobsTable', {
+      tableName: 'heediq-jobs',
+      partitionKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+
+    // ── SQS — transcription queue (D-023) ────────────────────────────────────
+
+    const transcriptionDlq = new sqs.Queue(this, 'TranscriptionDlq', {
+      queueName: 'heediq-transcription-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+      enforceSSL: true,
+    });
+
+    this.transcriptionQueue = new sqs.Queue(this, 'TranscriptionQueue', {
+      queueName: 'heediq-transcription',
+      // Covers longest expected paid-tier job (large-v3 + pyannote on CPU, 60-min recording)
+      visibilityTimeout: cdk.Duration.seconds(3600),
+      deadLetterQueue: { queue: transcriptionDlq, maxReceiveCount: 3 },
+      enforceSSL: true,
+    });
+
+    // ── S3 — audio uploads (D-023) ────────────────────────────────────────────
+    // Account-ID suffix keeps name globally unique while preserving D-037 spirit
+    // (see infra README Gotchas — S3 global namespace)
+
+    this.audioUploadsBucket = new s3.Bucket(this, 'AudioUploadsBucket', {
+      bucketName: `heediq-audio-uploads-${cdk.Aws.ACCOUNT_ID}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+          allowedOrigins: [
+            'https://heediq.com',
+            'https://staging.heediq.com',
+            'https://dev.heediq.com',
+            'http://localhost:5173',
+          ],
+          allowedHeaders: ['*'],
+          maxAge: 3600,
+        },
+      ],
+      lifecycleRules: [
+        {
+          // Paid-tier archival safety net (D-022); free-tier 30-day deletion handled by app
+          id: 'archive-to-glacier-deep',
+          transitions: [
+            {
+              storageClass: s3.StorageClass.DEEP_ARCHIVE,
+              transitionAfter: cdk.Duration.days(90),
+            },
+          ],
+        },
+        {
+          id: 'abort-incomplete-multipart',
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
+      removalPolicy,
+      autoDeleteObjects: !isProd,
+    });
+
+    // All OBJECT_CREATED events → SQS; Fargate worker filters by file extension
+    this.audioUploadsBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.SqsDestination(this.transcriptionQueue),
+    );
+
+    // ── S3 — web assets (CloudFront origin; WebStack adds OAC) ───────────────
+
+    this.webAssetsBucket = new s3.Bucket(this, 'WebAssetsBucket', {
+      bucketName: `heediq-web-assets-${cdk.Aws.ACCOUNT_ID}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy,
+      autoDeleteObjects: !isProd,
+    });
+
+    // ── Cognito User Pool (D-020) ─────────────────────────────────────────────
+
+    this.userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: 'heediq-users',
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      selfSignUpEnabled: true,
+      passwordPolicy: {
+        minLength: 8,
+        requireUppercase: true,
+        requireLowercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy,
+    });
+
+    // Hosted domain for OAuth redirects. Custom auth.heediq.com deferred (extra cert + DNS).
+    this.userPool.addDomain('UserPoolDomain', {
+      cognitoDomain: { domainPrefix: `heediq-${props.workloadEnv}` },
+    });
+
+    // Federated IdP credentials live in Secrets Manager — set real values after registering
+    // OAuth apps with Google Cloud Console and Azure portal (D-020). Pool deploys with
+    // placeholder values; email/password auth works immediately.
+
+    const googleProvider = new cognito.UserPoolIdentityProviderGoogle(this, 'GoogleIdP', {
+      userPool: this.userPool,
+      clientId: ssm.StringParameter.valueForStringParameter(this, '/heediq/auth/google-client-id'),
+      clientSecretValue: cdk.SecretValue.secretsManager('/heediq/auth/google-client-secret'),
+      scopes: ['email', 'profile', 'openid'],
+      attributeMapping: {
+        email: cognito.ProviderAttribute.GOOGLE_EMAIL,
+        givenName: cognito.ProviderAttribute.GOOGLE_NAME,
+        profilePicture: cognito.ProviderAttribute.GOOGLE_PICTURE,
+      },
+    });
+
+    // Full issuer URL in SSM: https://login.microsoftonline.com/{tenant-id}/v2.0
+    const microsoftProvider = new cognito.UserPoolIdentityProviderOidc(this, 'MicrosoftIdP', {
+      userPool: this.userPool,
+      name: 'Microsoft',
+      clientId: ssm.StringParameter.valueForStringParameter(this, '/heediq/auth/microsoft-client-id'),
+      clientSecret: cdk.SecretValue.secretsManager('/heediq/auth/microsoft-client-secret').unsafeUnwrap(),
+      issuerUrl: ssm.StringParameter.valueForStringParameter(this, '/heediq/auth/microsoft-issuer-url'),
+      scopes: ['openid', 'email', 'profile'],
+      attributeMapping: {
+        email: cognito.ProviderAttribute.other('email'),
+        givenName: cognito.ProviderAttribute.other('name'),
+      },
+    });
+
+    const webDomain = DOMAINS.web[props.workloadEnv];
+
+    this.userPoolClient = new cognito.UserPoolClient(this, 'UserPoolClient', {
+      userPool: this.userPool,
+      userPoolClientName: 'heediq-web',
+      generateSecret: false,
+      authFlows: { userPassword: true, userSrp: true },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE, cognito.OAuthScope.OPENID],
+        callbackUrls: [
+          `https://${webDomain}/auth/callback`,
+          ...(props.workloadEnv === 'dev' ? ['http://localhost:5173/auth/callback'] : []),
+        ],
+        logoutUrls: [
+          `https://${webDomain}`,
+          ...(props.workloadEnv === 'dev' ? ['http://localhost:5173'] : []),
+        ],
+      },
+      supportedIdentityProviders: [
+        cognito.UserPoolClientIdentityProvider.COGNITO,
+        cognito.UserPoolClientIdentityProvider.GOOGLE,
+        cognito.UserPoolClientIdentityProvider.custom('Microsoft'),
+      ],
+    });
+
+    // Ensure IdP constructs are created before the client references them
+    this.userPoolClient.node.addDependency(googleProvider);
+    this.userPoolClient.node.addDependency(microsoftProvider);
+
+    // ── SES — domain identity for noreply@heediq.com (D-054) ─────────────────
+    // DKIM CNAMEs must be added to the shared-services Route 53 zone after first deploy.
+    // Capture CfnOutputs below and open a SharedServicesStack PR (same pattern as Zoho DKIM).
+
+    const sesIdentity = new ses.CfnEmailIdentity(this, 'SesEmailIdentity', {
+      emailIdentity: 'heediq.com',
+      dkimAttributes: { signingEnabled: true },
+    });
+
+    new cdk.CfnOutput(this, 'SesDkimName1', { value: sesIdentity.attrDkimDnsTokenName1, description: 'CNAME name 1 — add to SharedServicesStack' });
+    new cdk.CfnOutput(this, 'SesDkimName2', { value: sesIdentity.attrDkimDnsTokenName2, description: 'CNAME name 2 — add to SharedServicesStack' });
+    new cdk.CfnOutput(this, 'SesDkimName3', { value: sesIdentity.attrDkimDnsTokenName3, description: 'CNAME name 3 — add to SharedServicesStack' });
+    new cdk.CfnOutput(this, 'SesDkimValue1', { value: sesIdentity.attrDkimDnsTokenValue1, description: 'CNAME value 1' });
+    new cdk.CfnOutput(this, 'SesDkimValue2', { value: sesIdentity.attrDkimDnsTokenValue2, description: 'CNAME value 2' });
+    new cdk.CfnOutput(this, 'SesDkimValue3', { value: sesIdentity.attrDkimDnsTokenValue3, description: 'CNAME value 3' });
+
+    // ── SSM params — resource locators for all app repos (D-038) ─────────────
+
+    const ssmParams: Array<[string, string, string]> = [
+      ['/heediq/api/recordings-table-name', this.recordingsTable.tableName,       'DynamoDB recordings table name'],
+      ['/heediq/api/orgs-table-name',        this.orgsTable.tableName,             'DynamoDB orgs table name'],
+      ['/heediq/api/users-table-name',       this.usersTable.tableName,            'DynamoDB users table name'],
+      ['/heediq/api/jobs-table-name',        this.jobsTable.tableName,             'DynamoDB jobs table name'],
+      ['/heediq/api/audio-bucket-name',      this.audioUploadsBucket.bucketName,   'S3 audio uploads bucket name'],
+      ['/heediq/api/web-assets-bucket-name', this.webAssetsBucket.bucketName,      'S3 web assets bucket name'],
+      ['/heediq/api/transcription-queue-url',this.transcriptionQueue.queueUrl,     'SQS transcription queue URL'],
+      ['/heediq/api/transcription-queue-arn',this.transcriptionQueue.queueArn,     'SQS transcription queue ARN'],
+      ['/heediq/api/cognito-user-pool-id',   this.userPool.userPoolId,             'Cognito User Pool ID'],
+      ['/heediq/api/cognito-user-pool-arn',  this.userPool.userPoolArn,            'Cognito User Pool ARN'],
+      ['/heediq/api/cognito-client-id',      this.userPoolClient.userPoolClientId, 'Cognito App Client ID'],
+    ];
+
+    for (const [name, value, description] of ssmParams) {
+      new ssm.StringParameter(this, name.replace(/\//g, '-').slice(1), {
+        parameterName: name,
+        stringValue: value,
+        description,
+      });
+    }
   }
 }

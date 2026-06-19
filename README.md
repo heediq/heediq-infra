@@ -161,10 +161,75 @@ Cert ARNs are in SSM (no manual step needed):
 ## Contracts
 
 - **SSM param convention**: `/heediq/{service}/{param}` — no environment prefix (D-038)
-- **Resource naming**: `heediq-{entity}` — no environment prefix (D-037)
+- **Resource naming**: `heediq-{entity}` — no environment prefix (D-037). **Exception:** S3 bucket names are globally unique, so buckets append the account ID: `heediq-audio-uploads-{accountId}`. App repos always resolve bucket names via SSM, never hardcode them.
 - **Secrets**: never in code or env files; fetched at Lambda cold start via Lambda Extension (D-038)
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
+
+### FoundationStack SSM params (consumed by all app repos)
+
+| SSM path | Value |
+|---|---|
+| `/heediq/api/recordings-table-name` | `heediq-recordings` |
+| `/heediq/api/orgs-table-name` | `heediq-orgs` |
+| `/heediq/api/users-table-name` | `heediq-users` |
+| `/heediq/api/jobs-table-name` | `heediq-jobs` |
+| `/heediq/api/audio-bucket-name` | `heediq-audio-uploads-{accountId}` |
+| `/heediq/api/web-assets-bucket-name` | `heediq-web-assets-{accountId}` |
+| `/heediq/api/transcription-queue-url` | SQS queue URL |
+| `/heediq/api/transcription-queue-arn` | SQS queue ARN |
+| `/heediq/api/cognito-user-pool-id` | Cognito User Pool ID |
+| `/heediq/api/cognito-user-pool-arn` | Cognito User Pool ARN |
+| `/heediq/api/cognito-client-id` | Cognito App Client ID (no secret — public browser client) |
+
+### FoundationStack DynamoDB key design
+
+| Table | PK | SK | GSIs |
+|---|---|---|---|
+| `heediq-recordings` | `orgId` | `recordingId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) |
+| `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) |
+| `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId) |
+| `heediq-jobs` | `recordingId` | — | — |
+
+### FoundationStack Cognito — prerequisite before first deploy
+
+Create placeholder secrets in the target account before deploying FoundationStack:
+
+```bash
+aws secretsmanager create-secret --name /heediq/auth/google-client-secret \
+  --secret-string "placeholder" --profile heediq-dev
+aws secretsmanager create-secret --name /heediq/auth/microsoft-client-secret \
+  --secret-string "placeholder" --profile heediq-dev
+aws ssm put-parameter --name /heediq/auth/google-client-id \
+  --value "placeholder" --type String --profile heediq-dev
+aws ssm put-parameter --name /heediq/auth/microsoft-client-id \
+  --value "placeholder" --type String --profile heediq-dev
+aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
+  --value "https://login.microsoftonline.com/placeholder/v2.0" --type String --profile heediq-dev
+```
+
+Replace placeholders with real credentials from Google Cloud Console and Azure portal (D-020). Email/password auth works immediately; federated sign-in activates once real credentials are set.
+
+### FoundationStack SES — post-deploy DNS wiring
+
+After deploying FoundationStack, capture the 6 SES DKIM outputs from the CloudFormation stack:
+
+```bash
+aws cloudformation describe-stacks --stack-name HeediqFoundationStack \
+  --profile heediq-dev \
+  --query "Stacks[0].Outputs[?starts_with(OutputKey,'SesDkim')]" --output table
+```
+
+Then open a SharedServicesStack PR adding 3 `route53.CnameRecord` constructs (same pattern as Zoho DKIM). Until those CNAMEs are added, SES identity stays "Pending verification" and no email can be sent.
+
+## Testing
+
+```bash
+pnpm test            # run CDK unit tests (Vitest + aws-cdk-lib/assertions)
+pnpm test:pre-pr     # typecheck + unit tests (the pre-PR gate)
+```
+
+Tests live in `test/`. Each stack gets its own `*.test.ts` file. CDK unit tests use `Template.fromStack()` to assert CloudFormation resource properties without deploying. No AWS credentials needed.
 
 ## Scripts
 
@@ -192,7 +257,9 @@ bash scripts/setup-budgets.sh
 - CloudFront ACM cert **must** be provisioned in `us-east-1`, even though all other resources are
   in `eu-west-1` (D-053). This requires a cross-region CDK construct.
 - Cross-account Route 53 records (workload accounts writing DNS aliases into the shared-services
-  hosted zone) require cross-account IAM grants on the hosted zone.
+  hosted zone) require cross-account IAM grants on the hosted zone. SES DKIM CNAMEs have the same
+  constraint — see FoundationStack SES section above for the two-step pattern.
+- **S3 bucket names are globally unique** across all AWS accounts, so buckets use `heediq-{entity}-{accountId}` (D-037 note). App repos resolve bucket names via SSM — they never hardcode the name.
 - `terminationProtection: true` is set on prod stacks — you must disable it manually before
   tearing down prod.
 - Always deploy `heediq-infra` before deploying app repos when a change adds new AWS resources
