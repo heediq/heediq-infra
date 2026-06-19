@@ -91,7 +91,14 @@ Use the local AWS CLI profile for the target account (D-045):
 | staging | `heediq-staging` |
 | prod | `heediq-prod` |
 
-## Initial Setup (one-time)
+## Initial Setup (owner-only, already done for this org)
+
+> **Developers joining the team:** skip this section entirely. The AWS org, CDK bootstrap, OIDC
+> roles, and shared-services stack are already provisioned. Configure your `heediq-dev` SSO profile
+> and start working — see `claude-workspace/README.md` for machine setup.
+
+This section documents what was done once when the AWS org was first set up. Repeat only if
+re-provisioning from scratch (disaster recovery, new org).
 
 The setup has a fixed order — shared-services must be fully deployed and `lib/config.ts` filled before any workload environment (dev/staging/prod) can deploy. Workload stacks reference the hosted zone ID and cert ARNs from config.ts.
 
