@@ -3,9 +3,10 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as ses from 'aws-cdk-lib/aws-ses';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { ACCOUNTS, DOMAINS, EMAIL } from '../config';
+import { ACCOUNTS, AWS_REGION, DOMAINS, EMAIL } from '../config';
 
 export class SharedServicesStack extends cdk.Stack {
   readonly hostedZone: route53.PublicHostedZone;
@@ -96,6 +97,49 @@ export class SharedServicesStack extends cdk.Stack {
         ttl: cdk.Duration.hours(1),
       });
     }
+
+    // ── SES — heediq.com domain identity (D-058) ─────────────────────────────
+    // Identity lives here alongside Route 53 so DKIM CNAMEs can be created in
+    // the same stack with no cross-account dependencies. Workload Lambdas send
+    // email by assuming heediq-ses-email-sending role in this account (D-058).
+
+    const sesIdentity = new ses.CfnEmailIdentity(this, 'SesEmailIdentity', {
+      emailIdentity: DOMAINS.root,
+      dkimAttributes: { signingEnabled: true },
+    });
+
+    // CNAME records wired in the same stack — attrDkimDnsTokenNameN is the full
+    // FQDN (e.g. xxx._domainkey.heediq.com); CfnRecordSet accepts full FQDNs.
+    for (let i = 1; i <= 3; i++) {
+      const name  = (sesIdentity as any)[`attrDkimDnsTokenName${i}`]  as string;
+      const value = (sesIdentity as any)[`attrDkimDnsTokenValue${i}`] as string;
+      new route53.CfnRecordSet(this, `SesDkimCname${i}`, {
+        hostedZoneId: this.hostedZone.hostedZoneId,
+        name,
+        type: 'CNAME',
+        ttl: '3600',
+        resourceRecords: [value],
+      });
+    }
+
+    // Cross-account IAM role — workload Lambdas assume this to send from noreply@heediq.com
+    const sesEmailSendingRole = new iam.Role(this, 'SesEmailSendingRole', {
+      roleName: 'heediq-ses-email-sending',
+      assumedBy: new iam.CompositePrincipal(
+        new iam.AccountPrincipal(ACCOUNTS.dev),
+        new iam.AccountPrincipal(ACCOUNTS.staging),
+        new iam.AccountPrincipal(ACCOUNTS.prod),
+      ),
+    });
+    sesEmailSendingRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ses:SendEmail', 'ses:SendRawEmail', 'ses:SendTemplatedEmail'],
+      resources: [`arn:aws:ses:${AWS_REGION}:${this.account}:identity/${DOMAINS.root}`],
+    }));
+
+    new cdk.CfnOutput(this, 'SesEmailSendingRoleArn', {
+      value: sesEmailSendingRole.roleArn,
+      description: 'IAM role assumed by workload Lambdas for cross-account SES sending (D-058)',
+    });
 
     // ── ACM — wildcard cert eu-west-1 for API Gateway (D-053) ─────────────────
 
