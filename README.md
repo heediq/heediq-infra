@@ -23,14 +23,15 @@ resources themselves.
 
 ## Stack Map
 
-| Stack | CDK construct ID | Account | Region |
+| Stack | Account | Region | Notes |
 |---|---|---|---|
-| `HeediqSharedServicesStack` | shared-services | `313828097088` | eu-west-1 |
-| `HeediqFoundationStack` | workload | per env | eu-west-1 |
-| `HeediqApiStack` | workload | per env | eu-west-1 |
-| `HeediqWebStack` | workload | per env | eu-west-1 |
-| `HeediqTranscriptionStack` | workload | per env | eu-west-1 |
-| `HeediqSummarizationStack` | workload | per env | eu-west-1 |
+| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, ACM cert |
+| `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
+| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, SES |
+| `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
+| `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
+| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + Fargate task defs |
+| `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -50,12 +51,24 @@ The same stack name (`HeediqFoundationStack`) exists in each workload account in
 
 Per D-043:
 
+Two workflow files (see `.github/workflows/`):
+
+**`deploy.yml`** — workload accounts:
+
 | Event | Action |
 |---|---|
-| Pull request | `pnpm typecheck` + `cdk synth -c env=dev` (no AWS calls) |
-| Push to `develop` | Deploy all workload stacks to dev account |
-| Push to `main` | Deploy to staging → manual approval (GitHub Environment) → deploy to prod |
-| `workflow_dispatch` (target: shared-services) | Deploy `HeediqSharedServicesStack` to shared-services account |
+| Pull request | `pnpm typecheck` + `cdk synth --all -c env=dev` (no AWS calls) |
+| Push to `develop` (non-shared-services files) | Deploy all workload stacks to dev |
+| Push to `main` | Deploy to staging → manual approval → deploy to prod |
+
+**`deploy-shared-services.yml`** — shared-services account only:
+
+| Event | Action |
+|---|---|
+| Push to `develop` (`lib/shared-services/**` or `bin/infra.ts`) | Deploy both shared-services stacks |
+| `workflow_dispatch` | Force re-deploy (escape hatch) |
+
+Shared-services never deploys from `main` — it has no dev/staging/prod split. `deploy.yml` ignores `lib/shared-services/**` changes so a shared-services-only push doesn't trigger a no-op workload deploy.
 
 OIDC role assumed per account — no stored AWS credentials (D-036).
 
@@ -80,29 +93,45 @@ Use the local AWS CLI profile for the target account (D-045):
 
 ## Bootstrap (one-time, per account)
 
-Before first deploy, each account needs CDK bootstrap and the OIDC deploy role:
+Before first deploy, each account needs CDK bootstrap and the OIDC deploy role.
+
+### 1. Bootstrap CDK
+
+The app entry requires `-c env=` — include it on every `cdk` command, even `bootstrap`.
 
 ```bash
-# Bootstrap CDK in each account (run once)
-AWS_PROFILE=heediq-shared cdk bootstrap aws://313828097088/eu-west-1
-AWS_PROFILE=heediq-dev    cdk bootstrap aws://276594885933/eu-west-1
-AWS_PROFILE=heediq-staging cdk bootstrap aws://475790160542/eu-west-1
-AWS_PROFILE=heediq-prod   cdk bootstrap aws://438825592314/eu-west-1
+# Workload accounts — eu-west-1 only
+pnpm cdk bootstrap aws://276594885933/eu-west-1 --profile heediq-dev     -c env=dev
+pnpm cdk bootstrap aws://475790160542/eu-west-1 --profile heediq-staging  -c env=dev
+pnpm cdk bootstrap aws://438825592314/eu-west-1 --profile heediq-prod     -c env=dev
 
-# Also bootstrap us-east-1 in shared-services for the CloudFront ACM cert (D-053)
-AWS_PROFILE=heediq-shared cdk bootstrap aws://313828097088/us-east-1
+# Shared-services account — BOTH regions (eu-west-1 for main stacks, us-east-1 for CloudFront cert)
+pnpm cdk bootstrap aws://313828097088/eu-west-1 --profile heediq-shared -c env=shared
+pnpm cdk bootstrap aws://313828097088/us-east-1 --profile heediq-shared -c env=shared
 ```
 
-The `GitHubActionsDeployRole` IAM role (trusted by `repo:heediq/heediq-infra:*`) must exist in
-each account before the CI workflow can assume it. See `claude-workspace/scripts/setup-aws-oidc.sh`.
+### 2. Create `GitHubActionsDeployRole` in each account
 
-Then deploy shared-services first:
+The role must exist in all four accounts (shared-services + dev + staging + prod) before CI can
+assume it. Trust policy: `repo:heediq/heediq-infra:*` with `StringLike` on the `sub` claim (wildcard
+ref — do not lock to a branch, that breaks PRs and workflow_dispatch).
+
+See `claude-workspace/scripts/setup-aws-oidc.sh` for the creation commands.
+
+### 3. Deploy shared-services first
+
+Trigger the `workflow_dispatch` on `deploy-shared-services.yml` (GitHub Actions UI or CLI):
+
 ```bash
-# Run once to provision ECR, Route 53 zone, ACM certs
-AWS_PROFILE=heediq-shared pnpm cdk deploy -c env=shared --require-approval never
+gh workflow run deploy-shared-services.yml --repo heediq/heediq-infra --ref develop
 ```
 
-After that, workload deploys run normally via CI.
+This provisions ECR, the Route 53 hosted zone, and ACM certs (both regions). After it completes:
+- Capture `HostedZoneId`, `CertArnEuWest1`, `CertArnUsEast1` from CloudFormation outputs
+- Update NS records at the domain registrar (from the `NameServers` output) — required for ACM validation
+- Fill `lib/config.ts` → `SHARED_SERVICES` fields and commit
+
+Workload deploys run normally via CI after shared-services is up.
 
 ## Contracts
 
