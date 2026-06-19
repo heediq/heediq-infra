@@ -5,6 +5,8 @@ on:
     branches: [develop, main]
   push:
     branches: [develop, main]
+    paths-ignore:
+      - 'lib/shared-services/**'
 
 env:
   AWS_REGION: eu-west-1
