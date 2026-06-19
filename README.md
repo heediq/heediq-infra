@@ -124,20 +124,19 @@ Take the `NameServers` output from `HeediqSharedServicesStack` and set them as t
 
 ### Step 4 — Fill config.ts and commit
 
-After the deploy completes, capture outputs and fill `lib/config.ts → SHARED_SERVICES`:
+Only `hostedZoneId` needs to be captured — cert ARNs are stored in SSM by the stacks and read at deploy time by workload stacks.
 
 ```bash
-# eu-west-1 outputs
 aws cloudformation describe-stacks --stack-name HeediqSharedServicesStack \
-  --profile heediq-shared --query "Stacks[0].Outputs"
-
-# us-east-1 cert output
-aws cloudformation describe-stacks --stack-name HeediqSharedServicesCfCertStack \
-  --profile heediq-shared --region us-east-1 \
-  --query "Stacks[0].Outputs[?OutputKey=='CertArnUsEast1'].OutputValue" --output text
+  --profile heediq-shared \
+  --query "Stacks[0].Outputs[?OutputKey=='HostedZoneId'].OutputValue" --output text
 ```
 
-Commit the filled values to develop. Workload CI deploys (dev/staging/prod) will work automatically after this — they read hosted zone ID and cert ARNs from config.ts.
+Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop. Workload CI deploys (dev/staging/prod) will work automatically after this.
+
+Cert ARNs are in SSM (no manual step needed):
+- `eu-west-1`: `/heediq/shared/cert-arn-eu-west-1`
+- `us-east-1`: `/heediq/shared/cert-arn-us-east-1`
 
 ## Contracts
 

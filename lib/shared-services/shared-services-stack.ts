@@ -134,7 +134,7 @@ export class SharedServicesStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'CertArnEuWest1', {
       value: this.certEuWest1.certificateArn,
-      description: 'Add to config.ts SHARED_SERVICES.certArnEuWest1',
+      description: 'ACM wildcard cert (eu-west-1) — also in SSM /heediq/shared/cert-arn-eu-west-1',
     });
 
     new cdk.CfnOutput(this, 'EcrRepoUri', {

@@ -27,7 +27,7 @@ export class SharedServicesCfCertStack extends cdk.Stack {
     // Note: validation will stay PENDING until NS records are updated at registrar
     // (same prerequisite as the eu-west-1 cert)
 
-    // SSM param in us-east-1 — for audit; cert ARN is added to config.ts after first deploy
+    // SSM param in us-east-1 — workload stacks read cert ARN from here at deploy time
     new ssm.StringParameter(this, 'CertArnUsEast1Param', {
       parameterName: '/heediq/shared/cert-arn-us-east-1',
       stringValue: this.certUsEast1.certificateArn,
@@ -36,7 +36,7 @@ export class SharedServicesCfCertStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'CertArnUsEast1', {
       value: this.certUsEast1.certificateArn,
-      description: 'Add to config.ts SHARED_SERVICES.certArnUsEast1',
+      description: 'ACM wildcard cert (us-east-1) — also in SSM /heediq/shared/cert-arn-us-east-1',
     });
   }
 }

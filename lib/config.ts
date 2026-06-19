@@ -24,12 +24,12 @@ export const DOMAINS = {
   } satisfies Record<WorkloadEnv, string>,
 } as const;
 
-// Populated after SharedServicesStack + SharedServicesCfCertStack first deploy.
-// Capture values from CloudFormation outputs, fill in below, and commit.
+// Populated after SharedServicesStack first deploy.
+// Cert ARNs are NOT stored here — they live in SSM and are read by workload stacks at deploy time:
+//   eu-west-1: /heediq/shared/cert-arn-eu-west-1
+//   us-east-1: /heediq/shared/cert-arn-us-east-1
 export const SHARED_SERVICES = {
-  hostedZoneId:   'Z0875312RP7WHSNW7AUM',
-  certArnEuWest1: 'arn:aws:acm:eu-west-1:313828097088:certificate/38f34fb6-a90b-4c74-9e97-7c9242ec88ed',
-  certArnUsEast1: 'arn:aws:acm:us-east-1:313828097088:certificate/7c0fdf03-1d8c-42c0-8b6b-ef0fc12da4fb',
+  hostedZoneId: 'Z0875312RP7WHSNW7AUM',
 } as const;
 
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
