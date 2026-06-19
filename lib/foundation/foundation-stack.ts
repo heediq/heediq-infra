@@ -4,10 +4,9 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as ses from 'aws-cdk-lib/aws-ses';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS } from '../config';
+import { WorkloadEnv, DOMAINS, ACCOUNTS } from '../config';
 
 export interface FoundationStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
@@ -257,22 +256,6 @@ export class FoundationStack extends cdk.Stack {
     this.userPoolClient.node.addDependency(googleProvider);
     this.userPoolClient.node.addDependency(microsoftProvider);
 
-    // ── SES — domain identity for noreply@heediq.com (D-054) ─────────────────
-    // DKIM CNAMEs must be added to the shared-services Route 53 zone after first deploy.
-    // Capture CfnOutputs below and open a SharedServicesStack PR (same pattern as Zoho DKIM).
-
-    const sesIdentity = new ses.CfnEmailIdentity(this, 'SesEmailIdentity', {
-      emailIdentity: 'heediq.com',
-      dkimAttributes: { signingEnabled: true },
-    });
-
-    new cdk.CfnOutput(this, 'SesDkimName1', { value: sesIdentity.attrDkimDnsTokenName1, description: 'CNAME name 1 — add to SharedServicesStack' });
-    new cdk.CfnOutput(this, 'SesDkimName2', { value: sesIdentity.attrDkimDnsTokenName2, description: 'CNAME name 2 — add to SharedServicesStack' });
-    new cdk.CfnOutput(this, 'SesDkimName3', { value: sesIdentity.attrDkimDnsTokenName3, description: 'CNAME name 3 — add to SharedServicesStack' });
-    new cdk.CfnOutput(this, 'SesDkimValue1', { value: sesIdentity.attrDkimDnsTokenValue1, description: 'CNAME value 1' });
-    new cdk.CfnOutput(this, 'SesDkimValue2', { value: sesIdentity.attrDkimDnsTokenValue2, description: 'CNAME value 2' });
-    new cdk.CfnOutput(this, 'SesDkimValue3', { value: sesIdentity.attrDkimDnsTokenValue3, description: 'CNAME value 3' });
-
     // ── SSM params — resource locators for all app repos (D-038) ─────────────
 
     const ssmParams: Array<[string, string, string]> = [
@@ -287,6 +270,8 @@ export class FoundationStack extends cdk.Stack {
       ['/heediq/api/cognito-user-pool-id',   this.userPool.userPoolId,             'Cognito User Pool ID'],
       ['/heediq/api/cognito-user-pool-arn',  this.userPool.userPoolArn,            'Cognito User Pool ARN'],
       ['/heediq/api/cognito-client-id',      this.userPoolClient.userPoolClientId, 'Cognito App Client ID'],
+      // Deterministic ARN — role created in SharedServicesStack (D-058)
+      ['/heediq/api/ses-sending-role-arn',   `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`, 'Cross-account IAM role for SES email sending'],
     ];
 
     for (const [name, value, description] of ssmParams) {

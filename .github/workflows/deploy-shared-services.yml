@@ -13,14 +13,14 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  typecheck:
-    name: Typecheck
+  validate:
+    name: Typecheck + Test + Synth
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -28,12 +28,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
       - name: Synth (validate without deploying)
         run: pnpm cdk synth --all -c env=shared --quiet
 
   deploy:
     name: Deploy → shared-services
-    needs: [typecheck]
+    needs: [validate]
     runs-on: ubuntu-latest
     environment: shared-services
     permissions:
@@ -43,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
