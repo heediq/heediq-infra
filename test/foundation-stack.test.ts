@@ -172,18 +172,9 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
-  // ── SES ────────────────────────────────────────────────────────────────────
-
-  it('creates SES email identity for heediq.com with DKIM signing', () => {
-    template.hasResourceProperties('AWS::SES::EmailIdentity', {
-      EmailIdentity: 'heediq.com',
-      DkimAttributes: { SigningEnabled: true },
-    });
-  });
-
   // ── SSM params ─────────────────────────────────────────────────────────────
 
-  it('exports all 11 required SSM parameters', () => {
+  it('exports all 12 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/api/recordings-table-name',
       '/heediq/api/orgs-table-name',
@@ -196,6 +187,7 @@ describe('FoundationStack (dev)', () => {
       '/heediq/api/cognito-user-pool-id',
       '/heediq/api/cognito-user-pool-arn',
       '/heediq/api/cognito-client-id',
+      '/heediq/api/ses-sending-role-arn',
     ];
     for (const name of expectedParams) {
       template.hasResourceProperties('AWS::SSM::Parameter', { Name: name });
