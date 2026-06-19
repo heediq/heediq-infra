@@ -205,10 +205,12 @@ aws ssm put-parameter --name /heediq/auth/google-client-id \
 aws ssm put-parameter --name /heediq/auth/microsoft-client-id \
   --value "placeholder" --type String --profile heediq-dev
 aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
-  --value "https://login.microsoftonline.com/placeholder/v2.0" --type String --profile heediq-dev
+  --value "https://login.microsoftonline.com/organizations/v2.0" --type String --profile heediq-dev
 ```
 
 Replace placeholders with real credentials from Google Cloud Console and Azure portal (D-020). Email/password auth works immediately; federated sign-in activates once real credentials are set.
+
+**Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
 
 ### FoundationStack SES — post-deploy DNS wiring
 
