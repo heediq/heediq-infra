@@ -110,13 +110,21 @@ pnpm cdk bootstrap aws://313828097088/eu-west-1 --profile heediq-shared -c env=s
 pnpm cdk bootstrap aws://313828097088/us-east-1 --profile heediq-shared -c env=shared
 ```
 
-### 2. Create `GitHubActionsDeployRole` in each account
+### 2. Create OIDC IAM roles in each account
 
-The role must exist in all four accounts (shared-services + dev + staging + prod) before CI can
-assume it. Trust policy: `repo:heediq/heediq-infra:*` with `StringLike` on the `sub` claim (wildcard
-ref — do not lock to a branch, that breaks PRs and workflow_dispatch).
+Two roles are needed. Both are created by **`claude-workspace/scripts/setup-aws-oidc.sh`** —
+run that script (idempotent, safe to re-run):
 
-See `claude-workspace/scripts/setup-aws-oidc.sh` for the creation commands.
+| Role | Accounts | Trusts | Policy |
+|---|---|---|---|
+| `GitHubActionsDeployRole` | shared-services + dev + staging + prod | `repo:heediq/heediq-infra:*` | `AdministratorAccess` |
+| `GitHubActionsECRRole` | shared-services only | `repo:heediq/*:*` | `AmazonEC2ContainerRegistryPowerUser` |
+
+`GitHubActionsDeployRole` is scoped to `heediq-infra` only — no other repo can trigger CDK deploys.
+`GitHubActionsECRRole` trusts all heediq repos so any app repo can push images to ECR.
+
+Trust policy `sub` must use `StringLike` with a wildcard ref (`repo:heediq/…:*`) — never lock
+to a branch (`ref:refs/heads/develop`), that breaks PRs and `workflow_dispatch`.
 
 ### 3. Deploy shared-services first
 
@@ -143,9 +151,10 @@ Workload deploys run normally via CI after shared-services is up.
 
 ## Scripts (one-time setup, not CDK)
 
-| Script | Purpose |
-|---|---|
-| `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account in the management account. Run once after configuring the `heediq-management` SSO profile. |
+| Script | Location | Purpose |
+|---|---|---|
+| `setup-aws-oidc.sh` | `claude-workspace/scripts/` | Creates OIDC providers + `GitHubActionsDeployRole` (all 4 accounts) + `GitHubActionsECRRole` (shared-services). Run once after CDK bootstrap. Idempotent. |
+| `setup-budgets.sh` | `scripts/` (this repo) | Creates $50/month cost budgets for the dev account via the management account. Run once after configuring the `heediq-management` SSO profile. |
 
 ### `heediq-management` SSO profile setup (one-time)
 
