@@ -5,14 +5,6 @@ on:
     branches: [develop, main]
   push:
     branches: [develop, main]
-  workflow_dispatch:
-    inputs:
-      target:
-        description: 'Deploy target'
-        required: true
-        default: 'shared-services'
-        type: choice
-        options: [shared-services]
 
 env:
   AWS_REGION: eu-west-1
@@ -36,33 +28,6 @@ jobs:
         run: pnpm typecheck
       - name: Synth (validate without deploying)
         run: pnpm cdk synth -c env=dev --quiet
-
-  deploy-shared-services:
-    name: Deploy → shared-services
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'shared-services'
-    needs: [typecheck]
-    runs-on: ubuntu-latest
-    environment: shared-services
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Configure AWS credentials (shared-services)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::313828097088:role/GitHubActionsDeployRole
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Deploy shared-services
-        run: pnpm cdk deploy -c env=shared --require-approval never
 
   deploy-dev:
     name: Deploy → dev
