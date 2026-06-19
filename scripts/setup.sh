@@ -13,7 +13,7 @@ set -euo pipefail
 # roles are updated in-place if they already exist).
 #
 # Prerequisites:
-#   AWS CLI with SSO profiles configured (run setup-claude.sh first):
+#   AWS CLI with SSO profiles configured (run setup-aws-profiles.sh first):
 #     aws sso login --profile heediq-shared
 #     aws sso login --profile heediq-dev
 #     aws sso login --profile heediq-staging
@@ -212,11 +212,11 @@ bootstrap_account "$DEV_PROFILE" "$DEV_ACCOUNT" "eu-west-1" "dev"
 
 echo "1d  staging (${STAGING_ACCOUNT})"
 verify_auth "$STAGING_PROFILE" "$STAGING_ACCOUNT"
-bootstrap_account "$STAGING_PROFILE" "$STAGING_ACCOUNT" "eu-west-1" "dev"
+bootstrap_account "$STAGING_PROFILE" "$STAGING_ACCOUNT" "eu-west-1" "staging"
 
 echo "1e  prod (${PROD_ACCOUNT})"
 verify_auth "$PROD_PROFILE" "$PROD_ACCOUNT"
-bootstrap_account "$PROD_PROFILE" "$PROD_ACCOUNT" "eu-west-1" "dev"
+bootstrap_account "$PROD_PROFILE" "$PROD_ACCOUNT" "eu-west-1" "prod"
 
 echo ""
 echo "--- 2. OIDC Providers + IAM Roles ---"
