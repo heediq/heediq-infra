@@ -23,14 +23,15 @@ resources themselves.
 
 ## Stack Map
 
-| Stack | CDK construct ID | Account | Region |
+| Stack | Account | Region | Notes |
 |---|---|---|---|
-| `HeediqSharedServicesStack` | shared-services | `313828097088` | eu-west-1 |
-| `HeediqFoundationStack` | workload | per env | eu-west-1 |
-| `HeediqApiStack` | workload | per env | eu-west-1 |
-| `HeediqWebStack` | workload | per env | eu-west-1 |
-| `HeediqTranscriptionStack` | workload | per env | eu-west-1 |
-| `HeediqSummarizationStack` | workload | per env | eu-west-1 |
+| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, ACM cert |
+| `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
+| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, SES |
+| `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
+| `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
+| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + Fargate task defs |
+| `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -50,12 +51,24 @@ The same stack name (`HeediqFoundationStack`) exists in each workload account in
 
 Per D-043:
 
+Two workflow files (see `.github/workflows/`):
+
+**`deploy.yml`** — workload accounts:
+
 | Event | Action |
 |---|---|
-| Pull request | `pnpm typecheck` + `cdk synth -c env=dev` (no AWS calls) |
-| Push to `develop` | Deploy all workload stacks to dev account |
-| Push to `main` | Deploy to staging → manual approval (GitHub Environment) → deploy to prod |
-| `workflow_dispatch` (target: shared-services) | Deploy `HeediqSharedServicesStack` to shared-services account |
+| Pull request | `pnpm typecheck` + `cdk synth --all -c env=dev` (no AWS calls) |
+| Push to `develop` (non-shared-services files) | Deploy all workload stacks to dev |
+| Push to `main` | Deploy to staging → manual approval → deploy to prod |
+
+**`deploy-shared-services.yml`** — shared-services account only:
+
+| Event | Action |
+|---|---|
+| Push to `develop` (`lib/shared-services/**` or `bin/infra.ts`) | Deploy both shared-services stacks |
+| `workflow_dispatch` | Force re-deploy (escape hatch) |
+
+Shared-services never deploys from `main` — it has no dev/staging/prod split. `deploy.yml` ignores `lib/shared-services/**` changes so a shared-services-only push doesn't trigger a no-op workload deploy.
 
 OIDC role assumed per account — no stored AWS credentials (D-036).
 
@@ -78,31 +91,33 @@ Use the local AWS CLI profile for the target account (D-045):
 | staging | `heediq-staging` |
 | prod | `heediq-prod` |
 
-## Bootstrap (one-time, per account)
+## Initial Setup (one-time)
 
-Before first deploy, each account needs CDK bootstrap and the OIDC deploy role:
+Run **`scripts/setup.sh`** from anywhere — it handles everything in order:
+
+1. CDK bootstrap (all 4 accounts, correct regions — shared-services gets both `eu-west-1` and `us-east-1` for the CloudFront cert stack)
+2. GitHub Actions OIDC providers in every account
+3. IAM roles: `GitHubActionsDeployRole` (all 4 accounts, trusts `heediq-infra` only) and `GitHubActionsECRRole` (shared-services, trusts all heediq repos)
 
 ```bash
-# Bootstrap CDK in each account (run once)
-AWS_PROFILE=heediq-shared cdk bootstrap aws://313828097088/eu-west-1
-AWS_PROFILE=heediq-dev    cdk bootstrap aws://276594885933/eu-west-1
-AWS_PROFILE=heediq-staging cdk bootstrap aws://475790160542/eu-west-1
-AWS_PROFILE=heediq-prod   cdk bootstrap aws://438825592314/eu-west-1
+# SSO login first
+aws sso login --profile heediq-shared
+aws sso login --profile heediq-dev
+aws sso login --profile heediq-staging
+aws sso login --profile heediq-prod
 
-# Also bootstrap us-east-1 in shared-services for the CloudFront ACM cert (D-053)
-AWS_PROFILE=heediq-shared cdk bootstrap aws://313828097088/us-east-1
+bash scripts/setup.sh
 ```
 
-The `GitHubActionsDeployRole` IAM role (trusted by `repo:heediq/heediq-infra:*`) must exist in
-each account before the CI workflow can assume it. See `claude-workspace/scripts/setup-aws-oidc.sh`.
+Idempotent — safe to re-run. The script prints the GitHub Actions org-level variable values at the end.
 
-Then deploy shared-services first:
+After setup, trigger the shared-services deploy and follow its output:
+
 ```bash
-# Run once to provision ECR, Route 53 zone, ACM certs
-AWS_PROFILE=heediq-shared pnpm cdk deploy -c env=shared --require-approval never
+gh workflow run deploy-shared-services.yml --repo heediq/heediq-infra --ref develop
 ```
 
-After that, workload deploys run normally via CI.
+Once it succeeds: capture CloudFormation outputs, fill `lib/config.ts` → `SHARED_SERVICES` fields, update NS records at the domain registrar. Workload CI runs automatically after that.
 
 ## Contracts
 
@@ -112,26 +127,22 @@ After that, workload deploys run normally via CI.
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
 
-## Scripts (one-time setup, not CDK)
+## Scripts
 
 | Script | Purpose |
 |---|---|
-| `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account in the management account. Run once after configuring the `heediq-management` SSO profile. |
+| `scripts/setup.sh` | One-time AWS setup: CDK bootstrap + OIDC providers + IAM roles. Run before first deploy. Idempotent. |
+| `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account via the management account. |
 
-### `heediq-management` SSO profile setup (one-time)
+`setup-budgets.sh` requires the `heediq-management` SSO profile:
 
 ```bash
 aws configure sso --profile heediq-management
 # SSO start URL → from IAM Identity Center in management account
 # SSO region    → eu-west-1
 
-aws sso login --profile heediq-management  # run before each script session
-```
-
-Then run:
-```bash
-chmod +x scripts/setup-budgets.sh
-./scripts/setup-budgets.sh
+aws sso login --profile heediq-management
+bash scripts/setup-budgets.sh
 ```
 
 ## Gotchas
