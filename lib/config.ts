@@ -29,7 +29,7 @@ export const DOMAINS = {
 export const SHARED_SERVICES = {
   hostedZoneId:   'Z0875312RP7WHSNW7AUM',
   certArnEuWest1: 'arn:aws:acm:eu-west-1:313828097088:certificate/38f34fb6-a90b-4c74-9e97-7c9242ec88ed',
-  certArnUsEast1: '',  // CfnOutput: HeediqSharedServicesCfCertStack.CertArnUsEast1 — fill after first deploy
+  certArnUsEast1: 'arn:aws:acm:us-east-1:313828097088:certificate/7c0fdf03-1d8c-42c0-8b6b-ef0fc12da4fb',
 } as const;
 
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
