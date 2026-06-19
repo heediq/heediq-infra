@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test:pre-pr": "tsc --noEmit",
+    "test": "vitest run",
+    "test:pre-pr": "tsc --noEmit && vitest run",
     "cdk": "cdk",
     "synth": "cdk synth",
     "diff": "cdk diff"
@@ -21,6 +22,7 @@
     "@types/node": "^22.0.0",
     "aws-cdk": "^2.140.0",
     "ts-node": "^10.9.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
   }
 }
