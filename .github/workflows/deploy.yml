@@ -3,10 +3,15 @@ name: Deploy Infrastructure
 on:
   pull_request:
     branches: [develop, main]
+    paths-ignore:
+      - 'README.md'
+      - 'scripts/**'
   push:
     branches: [develop, main]
     paths-ignore:
       - 'lib/shared-services/**'
+      - 'README.md'
+      - 'scripts/**'
 
 env:
   AWS_REGION: eu-west-1

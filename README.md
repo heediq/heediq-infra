@@ -74,6 +74,9 @@ OIDC role assumed per account — no stored AWS credentials (D-036).
 
 ## Local Development
 
+> **Regular developers** do not work directly with this repo or need AWS CLI configured — infra is
+> managed by the owner and CI handles all deployments. These commands are for infra contributors.
+
 ```bash
 pnpm install
 pnpm typecheck                         # type-check only
@@ -82,7 +85,8 @@ pnpm cdk diff -c env=dev               # diff against deployed dev (needs AWS cr
 pnpm cdk deploy --all -c env=dev       # deploy all dev stacks
 ```
 
-Use the local AWS CLI profile for the target account (D-045):
+AWS CLI profile needed for the target account — configure with `scripts/setup-aws-profiles.sh`
+(see Scripts section below):
 
 | Env | Profile |
 |---|---|
@@ -91,9 +95,25 @@ Use the local AWS CLI profile for the target account (D-045):
 | staging | `heediq-staging` |
 | prod | `heediq-prod` |
 
-## Initial Setup (one-time)
+## Initial Setup (owner-only, already done for this org)
+
+> **Developers joining the team:** skip this section entirely. The AWS org, CDK bootstrap, OIDC
+> roles, and shared-services stack are already provisioned. Configure your `heediq-dev` SSO profile
+> and start working — see `claude-workspace/README.md` for machine setup.
+
+This section documents what was done once when the AWS org was first set up. Repeat only if
+re-provisioning from scratch (disaster recovery, new org).
 
 The setup has a fixed order — shared-services must be fully deployed and `lib/config.ts` filled before any workload environment (dev/staging/prod) can deploy. Workload stacks reference the hosted zone ID and cert ARNs from config.ts.
+
+### Step 0 — Configure AWS SSO profiles
+
+Run **`scripts/setup-aws-profiles.sh`** — sets up all 4 AWS SSO profiles. You need the IAM
+Identity Center start URL from the management account console.
+
+```bash
+bash scripts/setup-aws-profiles.sh
+```
 
 ### Step 1 — Bootstrap + OIDC + IAM roles
 
@@ -148,12 +168,15 @@ Cert ARNs are in SSM (no manual step needed):
 
 ## Scripts
 
+All scripts are **infra owner / admin only**. Regular developers do not run these.
+
 | Script | Purpose |
 |---|---|
-| `scripts/setup.sh` | One-time AWS setup: CDK bootstrap + OIDC providers + IAM roles. Run before first deploy. Idempotent. |
+| `scripts/setup-aws-profiles.sh` | Configure AWS SSO profiles for all 4 accounts. Run once on a new machine. |
+| `scripts/setup.sh` | One-time CDK bootstrap + OIDC providers + IAM roles. Run after profile setup. Idempotent. |
 | `scripts/setup-budgets.sh` | Creates $50/month cost budgets for the dev account via the management account. |
 
-`setup-budgets.sh` requires the `heediq-management` SSO profile:
+`setup-budgets.sh` additionally requires the `heediq-management` SSO profile:
 
 ```bash
 aws configure sso --profile heediq-management
@@ -177,4 +200,4 @@ bash scripts/setup-budgets.sh
 - **OIDC trust policy `sub` must use a wildcard ref** — `repo:heediq/heediq-infra:*` with
   `StringLike`. Do NOT lock to a branch (`ref:refs/heads/develop`) — that breaks PRs and
   feature-branch synths. Do NOT use the old org name `admin-heediq`. Run
-  `claude-workspace/scripts/setup-aws-oidc.sh` to fix all accounts at once.
+  `scripts/setup.sh` to re-provision all accounts at once (idempotent).
