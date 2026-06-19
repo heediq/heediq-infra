@@ -93,14 +93,13 @@ Use the local AWS CLI profile for the target account (D-045):
 
 ## Initial Setup (one-time)
 
-Run **`scripts/setup.sh`** from anywhere — it handles everything in order:
+The setup has a fixed order — shared-services must be fully deployed and `lib/config.ts` filled before any workload environment (dev/staging/prod) can deploy. Workload stacks reference the hosted zone ID and cert ARNs from config.ts.
 
-1. CDK bootstrap (all 4 accounts, correct regions — shared-services gets both `eu-west-1` and `us-east-1` for the CloudFront cert stack)
-2. GitHub Actions OIDC providers in every account
-3. IAM roles: `GitHubActionsDeployRole` (all 4 accounts, trusts `heediq-infra` only) and `GitHubActionsECRRole` (shared-services, trusts all heediq repos)
+### Step 1 — Bootstrap + OIDC + IAM roles
+
+Run **`scripts/setup.sh`** — covers all 4 accounts in one pass:
 
 ```bash
-# SSO login first
 aws sso login --profile heediq-shared
 aws sso login --profile heediq-dev
 aws sso login --profile heediq-staging
@@ -109,15 +108,35 @@ aws sso login --profile heediq-prod
 bash scripts/setup.sh
 ```
 
-Idempotent — safe to re-run. The script prints the GitHub Actions org-level variable values at the end.
+Idempotent. The script prints the GitHub Actions org-level variable values at the end — set those at the org level in GitHub before the first workflow run.
 
-After setup, trigger the shared-services deploy and follow its output:
+### Step 2 — Deploy shared-services
 
 ```bash
 gh workflow run deploy-shared-services.yml --repo heediq/heediq-infra --ref develop
 ```
 
-Once it succeeds: capture CloudFormation outputs, fill `lib/config.ts` → `SHARED_SERVICES` fields, update NS records at the domain registrar. Workload CI runs automatically after that.
+This creates: ECR repo, Route 53 hosted zone, ACM cert (eu-west-1), email DNS records, and ACM cert (us-east-1 for CloudFront).
+
+### Step 3 — Update NS records at registrar
+
+Take the `NameServers` output from `HeediqSharedServicesStack` and set them as the domain's authoritative nameservers at the registrar (replace, don't add). ACM cert validation happens automatically once DNS propagates (~10–30 min).
+
+### Step 4 — Fill config.ts and commit
+
+Only `hostedZoneId` needs to be captured — cert ARNs are stored in SSM by the stacks and read at deploy time by workload stacks.
+
+```bash
+aws cloudformation describe-stacks --stack-name HeediqSharedServicesStack \
+  --profile heediq-shared \
+  --query "Stacks[0].Outputs[?OutputKey=='HostedZoneId'].OutputValue" --output text
+```
+
+Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop. Workload CI deploys (dev/staging/prod) will work automatically after this.
+
+Cert ARNs are in SSM (no manual step needed):
+- `eu-west-1`: `/heediq/shared/cert-arn-eu-west-1`
+- `us-east-1`: `/heediq/shared/cert-arn-us-east-1`
 
 ## Contracts
 
