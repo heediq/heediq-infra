@@ -1,0 +1,58 @@
+name: Deploy Shared Services
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'lib/shared-services/**'
+      - 'bin/infra.ts'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1
+  NODE_VERSION: '22'
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Synth (validate without deploying)
+        run: pnpm cdk synth -c env=shared --quiet
+
+  deploy:
+    name: Deploy → shared-services
+    needs: [typecheck]
+    runs-on: ubuntu-latest
+    environment: shared-services
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure AWS credentials (shared-services)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::313828097088:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy shared-services
+        run: pnpm cdk deploy -c env=shared --require-approval never
