@@ -29,7 +29,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
       - name: Synth (validate without deploying)
-        run: pnpm cdk synth -c env=shared --quiet
+        run: pnpm cdk synth --all -c env=shared --quiet
 
   deploy:
     name: Deploy → shared-services
@@ -55,4 +55,4 @@ jobs:
           role-to-assume: arn:aws:iam::313828097088:role/GitHubActionsDeployRole
           aws-region: ${{ env.AWS_REGION }}
       - name: Deploy shared-services
-        run: pnpm cdk deploy -c env=shared --require-approval never
+        run: pnpm cdk deploy --all -c env=shared --require-approval never
