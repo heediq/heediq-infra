@@ -2,7 +2,7 @@ name: Deploy Shared Services
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop]
     paths:
       - 'lib/shared-services/**'
       - 'bin/infra.ts'
