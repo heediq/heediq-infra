@@ -13,8 +13,8 @@ resources themselves.
 
 - `bin/infra.ts` — CDK app entry; selects stacks by `-c env=<shared|dev|staging|prod>`
 - `lib/config.ts` — all locked constants (account IDs, region, domains, compute sizing)
-- `lib/shared-services/shared-services-stack.ts` — ECR, Route 53, ACM certs
-- `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito, SES (per workload account)
+- `lib/shared-services/shared-services-stack.ts` — ECR, Route 53, ACM certs, SES identity + DKIM, cross-account email role
+- `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
 - `lib/transcription/transcription-stack.ts` — ECS cluster + Fargate task definitions
@@ -25,9 +25,9 @@ resources themselves.
 
 | Stack | Account | Region | Notes |
 |---|---|---|---|
-| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, ACM cert |
+| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, ACM cert, SES identity + DKIM, cross-account email role |
 | `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
-| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, SES |
+| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito |
 | `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + Fargate task defs |
@@ -57,7 +57,7 @@ Two workflow files (see `.github/workflows/`):
 
 | Event | Action |
 |---|---|
-| Pull request | `pnpm typecheck` + `cdk synth --all -c env=dev` (no AWS calls) |
+| Pull request | typecheck + unit tests + `cdk synth -c env=dev` (no AWS calls) |
 | Push to `develop` (non-shared-services files) | Deploy all workload stacks to dev |
 | Push to `main` | Deploy to staging → manual approval → deploy to prod |
 
@@ -65,7 +65,7 @@ Two workflow files (see `.github/workflows/`):
 
 | Event | Action |
 |---|---|
-| Push to `develop` (`lib/shared-services/**` or `bin/infra.ts`) | Deploy both shared-services stacks |
+| Push to `develop` (`lib/shared-services/**` or `bin/infra.ts`) | typecheck + unit tests + synth, then deploy |
 | `workflow_dispatch` | Force re-deploy (escape hatch) |
 
 Shared-services never deploys from `main` — it has no dev/staging/prod split. `deploy.yml` ignores `lib/shared-services/**` changes so a shared-services-only push doesn't trigger a no-op workload deploy.
@@ -181,6 +181,7 @@ Cert ARNs are in SSM (no manual step needed):
 | `/heediq/api/cognito-user-pool-id` | Cognito User Pool ID |
 | `/heediq/api/cognito-user-pool-arn` | Cognito User Pool ARN |
 | `/heediq/api/cognito-client-id` | Cognito App Client ID (no secret — public browser client) |
+| `/heediq/api/ses-sending-role-arn` | IAM role ARN in shared-services account for cross-account SES sending (D-058) |
 
 ### FoundationStack DynamoDB key design
 
@@ -211,18 +212,6 @@ aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
 Replace placeholders with real credentials from Google Cloud Console and Azure portal (D-020). Email/password auth works immediately; federated sign-in activates once real credentials are set.
 
 **Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
-
-### FoundationStack SES — post-deploy DNS wiring
-
-After deploying FoundationStack, capture the 6 SES DKIM outputs from the CloudFormation stack:
-
-```bash
-aws cloudformation describe-stacks --stack-name HeediqFoundationStack \
-  --profile heediq-dev \
-  --query "Stacks[0].Outputs[?starts_with(OutputKey,'SesDkim')]" --output table
-```
-
-Then open a SharedServicesStack PR adding 3 `route53.CnameRecord` constructs (same pattern as Zoho DKIM). Until those CNAMEs are added, SES identity stays "Pending verification" and no email can be sent.
 
 ## Testing
 
@@ -256,17 +245,14 @@ bash scripts/setup-budgets.sh
 
 ## Gotchas
 
-- CloudFront ACM cert **must** be provisioned in `us-east-1`, even though all other resources are
-  in `eu-west-1` (D-053). This requires a cross-region CDK construct.
-- Cross-account Route 53 records (workload accounts writing DNS aliases into the shared-services
-  hosted zone) require cross-account IAM grants on the hosted zone. SES DKIM CNAMEs have the same
-  constraint — see FoundationStack SES section above for the two-step pattern.
-- **S3 bucket names are globally unique** across all AWS accounts, so buckets use `heediq-{entity}-{accountId}` (D-037 note). App repos resolve bucket names via SSM — they never hardcode the name.
-- `terminationProtection: true` is set on prod stacks — you must disable it manually before
-  tearing down prod.
-- Always deploy `heediq-infra` before deploying app repos when a change adds new AWS resources
-  (D-050). App repos reference resource names via SSM params, not hardcoded ARNs.
-- **OIDC trust policy `sub` must use a wildcard ref** — `repo:heediq/heediq-infra:*` with
-  `StringLike`. Do NOT lock to a branch (`ref:refs/heads/develop`) — that breaks PRs and
-  feature-branch synths. Do NOT use the old org name `admin-heediq`. Run
-  `scripts/setup.sh` to re-provision all accounts at once (idempotent).
+- **CloudFront ACM cert must be in `us-east-1`** (D-053) — CloudFront only trusts certificates from that region, regardless of where the distribution is. CDK handles this via a cross-region stack.
+
+- **S3 bucket names append `${Aws.ACCOUNT_ID}`** — S3 namespace is globally unique across all AWS accounts so D-037's no-prefix rule can't apply. App repos always read the bucket name from SSM; never hardcode it.
+
+- **OIDC trust policy `sub` must be a wildcard** — use `repo:heediq/heediq-infra:*` with `StringLike`. Locking to a branch (`ref:refs/heads/develop`) blocks PRs and feature-branch synths. Re-run `scripts/setup.sh` if the trust policy drifts (idempotent).
+
+- **Cognito OIDC IdPs validate the issuer URL at deploy time** — CloudFormation calls `{issuerUrl}/.well-known/openid-configuration` when creating `AWS::Cognito::UserPoolIdentityProvider`. Placeholder tenant IDs (e.g. `placeholder` in a Microsoft URL) cause deploy failure. Use `https://login.microsoftonline.com/organizations/v2.0` as the placeholder until a real Azure tenant is registered.
+
+- **Cross-account email sending via role assumption** (D-058) — SES identity lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. Do NOT create SES identities in workload accounts — DKIM CNAMEs would require a cross-account Route 53 update, creating a dependency from shared-services on environment stacks.
+
+- **CDK S3 event notifications use a Lambda-backed custom resource** — `bucket.addEventNotification()` does not emit `AWS::S3::BucketNotification`. The verifiable contract in CDK unit tests is the `AWS::SQS::QueuePolicy` granting `s3.amazonaws.com` SendMessage permission.
