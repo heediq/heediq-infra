@@ -118,10 +118,10 @@ run that script (idempotent, safe to re-run):
 | Role | Accounts | Trusts | Policy |
 |---|---|---|---|
 | `GitHubActionsDeployRole` | shared-services + dev + staging + prod | `repo:heediq/heediq-infra:*` | `AdministratorAccess` |
-| `GitHubActionsECRRole` | shared-services only | `repo:heediq/*:*` | `AmazonEC2ContainerRegistryPowerUser` |
+| `GitHubActionsECRRole` | shared-services only | `repo:heediq/*:*` | scoped ECR push policy (heediq-* repos) |
 
 `GitHubActionsDeployRole` is scoped to `heediq-infra` only — no other repo can trigger CDK deploys.
-`GitHubActionsECRRole` trusts all heediq repos so any app repo can push images to ECR.
+`GitHubActionsECRRole` trusts all heediq repos so any app repo can push images to ECR in shared-services.
 
 Trust policy `sub` must use `StringLike` with a wildcard ref (`repo:heediq/…:*`) — never lock
 to a branch (`ref:refs/heads/develop`), that breaks PRs and `workflow_dispatch`.
