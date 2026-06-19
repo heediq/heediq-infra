@@ -27,9 +27,9 @@ export const DOMAINS = {
 // Populated after SharedServicesStack + SharedServicesCfCertStack first deploy.
 // Capture values from CloudFormation outputs, fill in below, and commit.
 export const SHARED_SERVICES = {
-  hostedZoneId:   '',  // CfnOutput: HeediqSharedServicesStack.HostedZoneId
-  certArnEuWest1: '',  // CfnOutput: HeediqSharedServicesStack.CertArnEuWest1
-  certArnUsEast1: '',  // CfnOutput: HeediqSharedServicesCfCertStack.CertArnUsEast1
+  hostedZoneId:   'Z0875312RP7WHSNW7AUM',
+  certArnEuWest1: 'arn:aws:acm:eu-west-1:313828097088:certificate/38f34fb6-a90b-4c74-9e97-7c9242ec88ed',
+  certArnUsEast1: '',  // CfnOutput: HeediqSharedServicesCfCertStack.CertArnUsEast1 — fill after first deploy
 } as const;
 
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
