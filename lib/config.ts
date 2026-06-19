@@ -35,7 +35,7 @@ export const SHARED_SERVICES = {
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
 // Leave zohoDkimKey empty until retrieved; the stack skips the DKIM record until it's set.
 export const EMAIL = {
-  zohoDkimKey: '', // e.g. "v=DKIM1; k=rsa; p=<key>"
+  zohoDkimKey: 'v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCGr9b9Y2d9Be+M8Q1AaeXUfI7ofWZSCNiS8b2Y2VtpyyO0OtkLa2ORZ7wujPFfCIRhNumqRl7f9qUT04qqydkL8/76kbjCHvgD/JobYIw6VhJ5WJ72lll0MMvvGgWS07QHwMQDMLNNBJ7eC4a6GH25FDGYb/1g2e7+udzwZRp+XwIDAQAB', // e.g. "v=DKIM1; k=rsa; p=<key>"
 } as const;
 
 // D-055 — all environments use identical sizing at launch; scale when metrics demand it
