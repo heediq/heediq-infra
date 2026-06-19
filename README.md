@@ -104,7 +104,7 @@ AWS CLI profile needed for the target account — configure with `scripts/setup-
 This section documents what was done once when the AWS org was first set up. Repeat only if
 re-provisioning from scratch (disaster recovery, new org).
 
-The setup has a fixed order — shared-services must be fully deployed and `lib/config.ts` filled before any workload environment (dev/staging/prod) can deploy. Workload stacks reference the hosted zone ID and cert ARNs from config.ts.
+The setup has a fixed order — shared-services must be fully deployed and `lib/config.ts` filled before any workload environment (dev/staging/prod) can deploy. Workload stacks reference the hosted zone ID from `lib/config.ts`; cert ARNs are read from SSM at deploy time.
 
 ### Step 0 — Configure AWS SSO profiles
 
