@@ -183,6 +183,23 @@ Cert ARNs are in SSM (no manual step needed):
 | `/heediq/api/cognito-client-id` | Cognito App Client ID (no secret — public browser client) |
 | `/heediq/api/ses-sending-role-arn` | IAM role ARN in shared-services account for cross-account SES sending (D-058) |
 
+### TranscriptionStack resources
+
+| Resource | Details |
+|---|---|
+| ECS cluster | `heediq-transcription` |
+| VPC | `heediq-transcription` — public subnets only (eu-west-1a/b/c), no NAT gateway |
+| CloudWatch log group | `/heediq/transcription` (30-day retention; no PII logged, D-038) |
+| Task def — free tier | 1 vCPU / 2 GB, `TIER=free` (whisper small, CPU, D-005/D-055) |
+| Task def — paid tier | 4 vCPU / 8 GB, `TIER=paid` (whisper large-v3 + pyannote, CPU, D-005/D-055) |
+| EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; FARGATE_SPOT (D-023) |
+| IAM execution role | `heediq-transcription-execution` — cross-account ECR pull (shared-services 313828097088) + CloudWatch Logs write |
+| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket) + DynamoDB write (heediq-jobs + heediq-recordings) |
+| IAM pipe role | `heediq-transcription-pipe` — SQS consume + `ecs:RunTask` + `iam:PassRole` |
+| ECR image | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription` (cross-account pull; repo resource policy set in SharedServicesStack) |
+
+**Message routing:** The API enqueues jobs with `messageAttributes.tier = 'free' | 'paid'`. Each pipe filters on its tier and launches the matching task definition on Fargate Spot. No idle containers — tasks are launched on demand and exit when done (D-023).
+
 ### FoundationStack DynamoDB key design
 
 | Table | PK | SK | GSIs |
@@ -256,3 +273,7 @@ bash scripts/setup-budgets.sh
 - **Cross-account email sending via role assumption** (D-058) — SES identity lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. Do NOT create SES identities in workload accounts — DKIM CNAMEs would require a cross-account Route 53 update, creating a dependency from shared-services on environment stacks.
 
 - **CDK S3 event notifications use a Lambda-backed custom resource** — `bucket.addEventNotification()` does not emit `AWS::S3::BucketNotification`. The verifiable contract in CDK unit tests is the `AWS::SQS::QueuePolicy` granting `s3.amazonaws.com` SendMessage permission.
+
+- **`cdk.context.json` must include AZ entries for each workload account** — `ec2.Vpc` in an environment-bound stack triggers an AZ lookup. Without a cache entry, `cdk synth` fails in CI (which has no AWS credentials in the `validate` job, D-043). The file is committed with `eu-west-1a/b/c` for dev/staging/prod accounts. If an account is re-created or a new account is added, append the corresponding entry. Values: `"availability-zones:account=<id>:region=eu-west-1": ["eu-west-1a", "eu-west-1b", "eu-west-1c"]`
+
+- **Cross-account ECR pull from `fromRegistry` triggers a CDK warning** — `ContainerImage.fromRegistry(ecrUri)` on a cross-account ECR URI produces `[Warning] Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'`. This is expected: `fromEcrRepository` only works for same-account repos. The explicit IAM statements on the execution role (plus the repo resource policy in SharedServicesStack) provide the correct cross-account access. The warning is harmless.
