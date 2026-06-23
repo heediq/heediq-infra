@@ -1,6 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as pipes from 'aws-cdk-lib/aws-pipes';
 import { Construct } from 'constructs';
-import { WorkloadEnv } from '../config';
+import { WorkloadEnv, COMPUTE, ACCOUNTS, AWS_REGION } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 
 export interface TranscriptionStackProps extends cdk.StackProps {
@@ -11,24 +16,199 @@ export interface TranscriptionStackProps extends cdk.StackProps {
 export class TranscriptionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: TranscriptionStackProps) {
     super(scope, id, props);
+    const { foundation } = props;
 
-    // TODO: ECS cluster — heediq-transcription
+    // ── CloudWatch log group ──────────────────────────────────────────────────
+    // Structured logs only — no PII (transcript text, audio URLs) per D-038
+    const logGroup = new logs.LogGroup(this, 'TranscriptionLogGroup', {
+      logGroupName: '/heediq/transcription',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
-    // TODO: Task definitions — two variants (D-005, D-055):
-    //   free-tier:  1 vCPU (cpu:1024), 2 GB (memoryMiB:2048) — whisper small, CPU
-    //   paid-tier:  4 vCPU (cpu:4096), 8 GB (memoryMiB:8192) — whisper large-v3 + pyannote, CPU
-    //   Container image: pulled from ECR in shared-services account (313828097088)
-    //   Fargate Spot capacity provider; no idle containers (D-023)
+    // ── VPC — public subnets only, no NAT gateway ─────────────────────────────
+    // Fargate tasks use assignPublicIp=ENABLED to reach ECR + S3 + DynamoDB.
+    // NAT gateway (~$32/AZ/mo) is unjustifiable at MVP; public subnets cost nothing fixed.
+    // Hardcode eu-west-1 AZs to avoid a context lookup — synth must work without AWS credentials
+    // in the CI validate job (D-043). Change this if the primary region changes (D-044).
+    const vpc = new ec2.Vpc(this, 'Vpc', {
+      vpcName: 'heediq-transcription',
+      availabilityZones: [`${AWS_REGION}a`, `${AWS_REGION}b`],
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+      ],
+    });
 
-    // TODO: EventBridge Pipe — SQS heediq-transcription → ECS RunTask Fargate Spot (D-023)
-    //   Message attribute on SQS determines free vs paid task definition
-    //   Job status (queued/transcribing/diarizing/done/error) written to heediq-jobs DynamoDB table
+    // Outbound-only: tasks pull audio from S3, write to DynamoDB, pull image from ECR
+    const taskSg = new ec2.SecurityGroup(this, 'TaskSg', {
+      vpc,
+      securityGroupName: 'heediq-transcription-task',
+      description: 'Fargate transcription task — outbound only',
+      allowAllOutbound: true,
+    });
 
-    // TODO: IAM execution role
-    //   Read from heediq-audio-uploads S3 bucket
-    //   Write to heediq-jobs and heediq-recordings DynamoDB tables
-    //   ECR image pull (cross-account, shared-services account 313828097088)
+    // ── ECS Cluster (D-037 naming) ─────────────────────────────────────────────
+    const cluster = new ecs.Cluster(this, 'Cluster', {
+      clusterName: 'heediq-transcription',
+      vpc,
+    });
 
-    // TODO: CloudWatch log group — /heediq/transcription (structured logs, no PII)
+    // ── IAM: execution role (ECS agent — pull image from ECR, write logs) ─────
+    const executionRole = new iam.Role(this, 'ExecutionRole', {
+      roleName: 'heediq-transcription-execution',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+
+    // GetAuthorizationToken is a global action — cannot be scoped to a specific repo
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['ecr:GetAuthorizationToken'],
+        resources: ['*'],
+      }),
+    );
+
+    // Cross-account ECR pull from shared-services (D-045, D-004).
+    // The ECR repo also has AllowWorkloadAccountPull resource policy (SharedServicesStack) —
+    // both sides of the cross-account trust are required.
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+          'ecr:BatchCheckLayerAvailability',
+        ],
+        resources: [
+          `arn:aws:ecr:${AWS_REGION}:${ACCOUNTS.sharedServices}:repository/heediq-worker-transcription`,
+        ],
+      }),
+    );
+
+    // ── IAM: task role (app code — read S3, write DynamoDB) ───────────────────
+    const taskRole = new iam.Role(this, 'TaskRole', {
+      roleName: 'heediq-transcription-task',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+
+    foundation.audioUploadsBucket.grantRead(taskRole);
+    foundation.jobsTable.grantWriteData(taskRole);
+    foundation.recordingsTable.grantWriteData(taskRole);
+
+    // ── Task definitions (D-005, D-055) ───────────────────────────────────────
+    // Same ECR image for both tiers; TIER env var tells the worker which model to load.
+    // No GPU on Fargate — large-v3 runs on CPU (acceptable for async batch, D-055).
+    const ecrImageUri = `${ACCOUNTS.sharedServices}.dkr.ecr.${AWS_REGION}.amazonaws.com/heediq-worker-transcription`;
+
+    // Config injected as env vars at launch — no SSM in hot path (D-038)
+    const baseEnv: Record<string, string> = {
+      AWS_DEFAULT_REGION: AWS_REGION,
+      JOBS_TABLE_NAME: foundation.jobsTable.tableName,
+      RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
+      AUDIO_BUCKET_NAME: foundation.audioUploadsBucket.bucketName,
+    };
+
+    // Free tier: whisper small, CPU — 1 vCPU / 2 GB (D-005, D-055)
+    const freeTierTaskDef = new ecs.FargateTaskDefinition(this, 'FreeTierTaskDef', {
+      cpu: COMPUTE.fargate.free.cpu,
+      memoryLimitMiB: COMPUTE.fargate.free.memoryMiB,
+      executionRole,
+      taskRole,
+    });
+    freeTierTaskDef.addContainer('Worker', {
+      containerName: 'heediq-transcription-worker',
+      image: ecs.ContainerImage.fromRegistry(ecrImageUri),
+      environment: { ...baseEnv, TIER: 'free' },
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'free', logGroup }),
+    });
+
+    // Paid tier: whisper large-v3 + pyannote diarization, CPU — 4 vCPU / 8 GB (D-005, D-055)
+    const paidTierTaskDef = new ecs.FargateTaskDefinition(this, 'PaidTierTaskDef', {
+      cpu: COMPUTE.fargate.paid.cpu,
+      memoryLimitMiB: COMPUTE.fargate.paid.memoryMiB,
+      executionRole,
+      taskRole,
+    });
+    paidTierTaskDef.addContainer('Worker', {
+      containerName: 'heediq-transcription-worker',
+      image: ecs.ContainerImage.fromRegistry(ecrImageUri),
+      environment: { ...baseEnv, TIER: 'paid' },
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'paid', logGroup }),
+    });
+
+    // ── IAM: EventBridge Pipes role ────────────────────────────────────────────
+    const pipeRole = new iam.Role(this, 'PipeRole', {
+      roleName: 'heediq-transcription-pipe',
+      assumedBy: new iam.ServicePrincipal('pipes.amazonaws.com'),
+    });
+
+    // SQS: receive + delete + get-attributes (pipe manages message lifecycle)
+    foundation.transcriptionQueue.grantConsumeMessages(pipeRole);
+
+    pipeRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['ecs:RunTask'],
+        resources: [freeTierTaskDef.taskDefinitionArn, paidTierTaskDef.taskDefinitionArn],
+      }),
+    );
+
+    // PassRole so the RunTask call can attach both roles to the Fargate task
+    pipeRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [executionRole.roleArn, taskRole.roleArn],
+      }),
+    );
+
+    // ── EventBridge Pipes (D-023) — SQS → ECS RunTask on Fargate Spot ─────────
+    // Two pipes, one per tier, each filtered on the 'tier' SQS message attribute.
+    // The API sets messageAttributes.tier = 'free' | 'paid' when enqueuing a job.
+    // No launchType field — capacityProviderStrategy takes precedence (AWS requirement).
+    // No idle containers — tasks are launched on demand and exit when done (D-023).
+    const subnetIds = vpc.publicSubnets.map((s) => s.subnetId);
+
+    const tierPipes: Array<['free' | 'paid', ecs.FargateTaskDefinition]> = [
+      ['free', freeTierTaskDef],
+      ['paid', paidTierTaskDef],
+    ];
+
+    for (const [tier, taskDef] of tierPipes) {
+      const capitalized = (tier.charAt(0).toUpperCase() + tier.slice(1)) as 'Free' | 'Paid';
+
+      new pipes.CfnPipe(this, `${capitalized}TierPipe`, {
+        name: `heediq-transcription-${tier}`,
+        roleArn: pipeRole.roleArn,
+        source: foundation.transcriptionQueue.queueArn,
+        sourceParameters: {
+          sqsQueueParameters: { batchSize: 1 },
+          filterCriteria: {
+            filters: [
+              {
+                pattern: JSON.stringify({
+                  messageAttributes: { tier: { stringValue: [tier] } },
+                }),
+              },
+            ],
+          },
+        },
+        target: cluster.clusterArn,
+        targetParameters: {
+          ecsTaskParameters: {
+            taskDefinitionArn: taskDef.taskDefinitionArn,
+            capacityProviderStrategy: [{ capacityProvider: 'FARGATE_SPOT', weight: 1 }],
+            networkConfiguration: {
+              awsvpcConfiguration: {
+                subnets: subnetIds,
+                securityGroups: [taskSg.securityGroupId],
+                assignPublicIp: 'ENABLED',
+              },
+            },
+          },
+        },
+      });
+    }
   }
 }
