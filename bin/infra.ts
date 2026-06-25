@@ -8,6 +8,7 @@ import { ApiStack } from '../lib/api/api-stack';
 import { WebStack } from '../lib/web/web-stack';
 import { TranscriptionStack } from '../lib/transcription/transcription-stack';
 import { SummarizationStack } from '../lib/summarization/summarization-stack';
+import { WebSocketStack } from '../lib/websocket/websocket-stack';
 
 const app = new cdk.App();
 const targetEnv = app.node.tryGetContext('env') as WorkloadEnv | 'shared' | undefined;
@@ -55,6 +56,13 @@ if (targetEnv === 'shared') {
   });
 
   new SummarizationStack(app, 'HeediqSummarizationStack', {
+    env,
+    workloadEnv,
+    terminationProtection,
+    foundation,
+  });
+
+  new WebSocketStack(app, 'HeediqWebSocketStack', {
     env,
     workloadEnv,
     terminationProtection,

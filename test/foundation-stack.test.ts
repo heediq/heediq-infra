@@ -17,15 +17,27 @@ describe('FoundationStack (dev)', () => {
 
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
-  it('creates 4 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 4);
+  it('creates 5 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 5);
   });
 
-  it('all tables use PAY_PER_REQUEST with PITR enabled', () => {
+  it('all tables use PAY_PER_REQUEST', () => {
     template.allResourcesProperties('AWS::DynamoDB::Table', {
       BillingMode: 'PAY_PER_REQUEST',
-      PointInTimeRecoverySpecification: Match.objectLike({ PointInTimeRecoveryEnabled: true }),
     });
+  });
+
+  it('all non-ws-connections tables have PITR enabled', () => {
+    // ws-connections is ephemeral (TTL-managed) — PITR not required
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    for (const [, resource] of Object.entries(tables)) {
+      const props = (resource as { Properties: Record<string, unknown> }).Properties;
+      if (props['TableName'] === 'heediq-ws-connections') continue;
+      const pitr = props['PointInTimeRecoverySpecification'] as { PointInTimeRecoveryEnabled?: boolean } | undefined;
+      if (!pitr?.PointInTimeRecoveryEnabled) {
+        throw new Error(`Table ${String(props['TableName'])} is missing PITR`);
+      }
+    }
   });
 
   it('recordings table has correct key schema and 2 GSIs', () => {
@@ -60,10 +72,22 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
-  it('jobs table uses recordingId as partition key', () => {
+  it('jobs table uses recordingId as partition key with DDB Streams NEW_IMAGE enabled', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-jobs',
       KeySchema: [{ AttributeName: 'recordingId', KeyType: 'HASH' }],
+      StreamSpecification: { StreamViewType: 'NEW_IMAGE' },
+    });
+  });
+
+  it('ws-connections table has connectionId PK, expiresAt TTL, and by-recording GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-ws-connections',
+      KeySchema: [{ AttributeName: 'connectionId', KeyType: 'HASH' }],
+      TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({ IndexName: 'by-recording' }),
+      ]),
     });
   });
 
@@ -174,7 +198,7 @@ describe('FoundationStack (dev)', () => {
 
   // ── SSM params ─────────────────────────────────────────────────────────────
 
-  it('exports all 12 required SSM parameters', () => {
+  it('exports all 13 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/api/recordings-table-name',
       '/heediq/api/orgs-table-name',
@@ -188,6 +212,7 @@ describe('FoundationStack (dev)', () => {
       '/heediq/api/cognito-user-pool-arn',
       '/heediq/api/cognito-client-id',
       '/heediq/api/ses-sending-role-arn',
+      '/heediq/api/ws-connections-table-name',
     ];
     for (const name of expectedParams) {
       template.hasResourceProperties('AWS::SSM::Parameter', { Name: name });
