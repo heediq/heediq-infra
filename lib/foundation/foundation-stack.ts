@@ -44,14 +44,16 @@ export class FoundationStack extends cdk.Stack {
     const isProd = props.workloadEnv === 'prod';
     const removalPolicy = isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
-    // ── ACM wildcard cert (eu-west-1) — API Gateway + WebSocket custom domains (D-053) ──
-    // DNS validation CNAME for *.heediq.com already exists in Route 53 (shared-services
-    // account). ACM derives the same CNAME regardless of which account the cert lives in —
-    // so this cert will auto-validate without any DNS change needed.
+    // ── ACM wildcard cert (eu-west-1) — API Gateway + WebSocket custom domains (D-053, D-063) ──
+    // Cert must live in this workload account — API Gateway rejects cross-account certs.
+    // IMPORTANT: ACM generates a unique validation CNAME per cert request (not per domain).
+    // On FIRST deploy for each new environment, the CNAME for THIS cert must be manually added
+    // to Route 53 in the shared-services account. See heediq-infra/README.md → Domains section.
+    // ACM auto-renews using the same CNAME — the manual step is truly one-time per cert.
     this.wildcardCert = new acm.Certificate(this, 'WildcardCert', {
       domainName: `*.${DOMAINS.root}`,
       subjectAlternativeNames: [DOMAINS.root],
-      validation: acm.CertificateValidation.fromDns(), // CNAME already in Route 53
+      validation: acm.CertificateValidation.fromDns(),
     });
 
     new ssm.StringParameter(this, 'WildcardCertArnParam', {

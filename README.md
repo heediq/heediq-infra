@@ -26,9 +26,9 @@ resources themselves.
 
 | Stack | Account | Region | Notes |
 |---|---|---|---|
-| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, ACM cert, SES identity + DKIM, cross-account email role |
+| `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, SES identity + DKIM, cross-account email role, Route 53 DNS manager role, ACM wildcard cert (shared-services own use only) |
 | `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
-| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito |
+| `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, ACM wildcard cert eu-west-1 (workload custom domains — D-063) |
 | `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
@@ -67,10 +67,11 @@ Two workflow files (see `.github/workflows/`):
 
 | Event | Action |
 |---|---|
-| Push to `develop` (`lib/shared-services/**` or `bin/infra.ts`) | typecheck + unit tests + synth, then deploy |
+| Pull request (`lib/shared-services/**` or `test/shared-services-stack.test.ts`) | typecheck + unit tests + synth only (no deploy) |
+| Push to `develop` (same paths) | typecheck + unit tests + synth, then deploy |
 | `workflow_dispatch` | Force re-deploy (escape hatch) |
 
-Shared-services never deploys from `main` — it has no dev/staging/prod split. `deploy.yml` ignores `lib/shared-services/**` changes so a shared-services-only push doesn't trigger a no-op workload deploy.
+Shared-services never deploys from `main` — it has no dev/staging/prod split. `deploy.yml` ignores `lib/shared-services/**`, `test/shared-services-stack.test.ts`, and `.github/**` so CI config changes and shared-services changes never trigger a workload deploy.
 
 OIDC role assumed per account — no stored AWS credentials (D-036).
 
@@ -138,7 +139,9 @@ Idempotent. The script prints the GitHub Actions org-level variable values at th
 gh workflow run deploy-shared-services.yml --repo heediq/heediq-infra --ref develop
 ```
 
-This creates: ECR repo, Route 53 hosted zone, ACM cert (eu-west-1), email DNS records, and ACM cert (us-east-1 for CloudFront).
+This creates: ECR repo, Route 53 hosted zone, SES identity + DKIM records, Zoho email DNS records, cross-account IAM roles (SES sending, Route 53 DNS manager), ACM wildcard cert eu-west-1 (shared-services' own), and ACM wildcard cert us-east-1 (for CloudFront).
+
+> **Note:** Workload-facing `eu-west-1` ACM certs live in `FoundationStack` per workload account (D-063), not in shared-services. Each workload cert's validation CNAME must be added to Route 53 manually on first deploy — see [Domains, Subdomains & Certificates](#domains-subdomains--certificates).
 
 ### Step 3 — Update NS records at registrar
 
@@ -146,7 +149,7 @@ Take the `NameServers` output from `HeediqSharedServicesStack` and set them as t
 
 ### Step 4 — Fill config.ts and commit
 
-Only `hostedZoneId` needs to be captured — cert ARNs are stored in SSM by the stacks and read at deploy time by workload stacks.
+Only `hostedZoneId` needs to be captured — it goes in `lib/config.ts` and is never looked up at runtime.
 
 ```bash
 aws cloudformation describe-stacks --stack-name HeediqSharedServicesStack \
@@ -154,11 +157,9 @@ aws cloudformation describe-stacks --stack-name HeediqSharedServicesStack \
   --query "Stacks[0].Outputs[?OutputKey=='HostedZoneId'].OutputValue" --output text
 ```
 
-Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop. Workload CI deploys (dev/staging/prod) will work automatically after this.
+Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 
-Cert ARNs are in SSM (no manual step needed):
-- `eu-west-1`: `/heediq/shared/cert-arn-eu-west-1`
-- `us-east-1`: `/heediq/shared/cert-arn-us-east-1`
+> **Cert ARNs are NOT stored in SSM for workload stacks.** Each workload account creates its own wildcard cert in `FoundationStack` (D-063). The cert ARN is passed directly as a CDK prop — no SSM lookup needed at deploy time. See [Domains, Subdomains & Certificates](#domains-subdomains--certificates) for the one-time DNS validation CNAME step required per environment.
 
 ## Contracts
 
@@ -168,14 +169,23 @@ Cert ARNs are in SSM (no manual step needed):
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
 
+### SharedServicesStack SSM params
+
+| SSM path | Value |
+|---|---|
+| `/heediq/shared/hosted-zone-id` | Route 53 hosted zone ID for `heediq.com` |
+| `/heediq/shared/route53-dns-manager-role-arn` | IAM role ARN — assumed by workload CDK custom resources to manage Route 53 DNS records (D-064) |
+
 ### FoundationStack SSM params (consumed by all app repos)
 
 | SSM path | Value |
 |---|---|
+| `/heediq/infra/cert-arn-eu-west-1` | ACM wildcard cert ARN (eu-west-1) — API Gateway + WebSocket custom domains (D-063) |
 | `/heediq/api/recordings-table-name` | `heediq-recordings` |
 | `/heediq/api/orgs-table-name` | `heediq-orgs` |
 | `/heediq/api/users-table-name` | `heediq-users` |
 | `/heediq/api/jobs-table-name` | `heediq-jobs` |
+| `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` — WebSocket connection tracking (D-061) |
 | `/heediq/api/audio-bucket-name` | `heediq-audio-uploads-{accountId}` |
 | `/heediq/api/web-assets-bucket-name` | `heediq-web-assets-{accountId}` |
 | `/heediq/api/transcription-queue-url` | SQS queue URL |
@@ -211,28 +221,28 @@ Cert ARNs are in SSM (no manual step needed):
 
 **Spot interruption:** worker catches SIGTERM → writes `status=retrying` to `heediq-jobs` → SQS message re-enqueues on visibility timeout expiry (D-059).
 
-### WebSocketStack resources (D-061, planned)
-
-> **Planned — not yet deployed.** Implementation follows TranscriptionStack GPU migration.
+### WebSocketStack resources (D-061)
 
 | Resource | Details |
 |---|---|
-| WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes |
-| Connection Lambda | On `$connect`: validates JWT (query param `?token=<jwt>`), stores `connectionId` + `userId` + `orgId` + `recordingId` in `heediq-ws-connections`. On `$disconnect`: removes row. |
-| Status Pusher Lambda | Triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-recording` (PK=`recordingId`); POSTs status payload to each active `connectionId` via `execute-api:ManageConnections`. On `GoneException` (stale connection): deletes row from table. |
-| Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from SSM (D-053) |
+| WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes, stage `ws`, auto-deploy |
+| Connection Lambda | `heediq-ws-connect` — on `$connect`: validates JWT, stores `connectionId` in `heediq-ws-connections`; on `$disconnect`: removes row. 29s timeout (WebSocket $connect hard limit). |
+| Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-recording`; POSTs status to each active `connectionId` via `execute-api:ManageConnections`. Deletes stale connections on `GoneException`. |
+| Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
 | IAM: pusher role | `execute-api:ManageConnections` scoped to WebSocket API ARN |
 
 **Status stages pushed to client:** `queued → starting → transcribing → diarizing (large-v3 only) → summarizing → done / failed`
 
-`starting` is written by the transcription worker as its first DynamoDB update (before model load) — surfaces EC2 cold-start as visible UX state rather than a silent wait.
+`starting` is the worker's first DynamoDB write before model load — makes EC2 cold-start latency visible as "Transcription server starting…" rather than a silent wait.
 
-**New SSM params (to be added in FoundationStack):**
+**SSM params (WebSocketStack):**
 
 | SSM path | Value |
 |---|---|
-| `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` |
-| `/heediq/api/ws-endpoint-url` | WebSocket API endpoint URL (set post-deploy) |
+| `/heediq/api/ws-endpoint-url` | `wss://ws-{env}.heediq.com` — consumed by `heediq-web` and `heediq-api` |
+| `/heediq/api/ws-regional-domain-name` | API Gateway regional domain name — Route 53 A-alias target (pending DNS record creation) |
+
+> **Pending:** Route 53 A-alias records for `ws-*.heediq.com` → API Gateway regional domain name. Requires CDK custom resource that assumes `heediq-route53-dns-manager` role. See [Domains, Subdomains & Certificates](#domains-subdomains--certificates).
 
 ### FoundationStack DynamoDB key design
 
@@ -244,7 +254,7 @@ Cert ARNs are in SSM (no manual step needed):
 | `heediq-jobs` | `recordingId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
 | `heediq-ws-connections` | `connectionId` | — | `by-recording` (PK=`recordingId`), TTL on `expiresAt` | — |
 
-`heediq-ws-connections` is a **planned addition** (D-061) — not yet deployed. Will be added to FoundationStack alongside WebSocketStack implementation.
+`heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
 
 ### FoundationStack Cognito — prerequisite before first deploy
 
@@ -266,6 +276,110 @@ aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
 Replace placeholders with real credentials from Google Cloud Console and Azure portal (D-020). Email/password auth works immediately; federated sign-in activates once real credentials are set.
 
 **Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
+
+## Domains, Subdomains & Certificates
+
+### Domain & subdomain structure (D-052)
+
+All subdomains are single-level — all covered by the `*.heediq.com` wildcard cert. Prod uses the root domain; staging/dev carry an environment prefix:
+
+| Service | Prod | Staging | Dev |
+|---|---|---|---|
+| Web (CloudFront) | `heediq.com` | `staging.heediq.com` | `dev.heediq.com` |
+| API (API Gateway) | `api.heediq.com` | `api-staging.heediq.com` | `api-dev.heediq.com` |
+| WebSocket | `ws.heediq.com` | `ws-staging.heediq.com` | `ws-dev.heediq.com` |
+
+Defined in `lib/config.ts → DOMAINS`.
+
+### Certificate placement (D-053, D-063)
+
+Two cert regions:
+- **`eu-west-1`** — API Gateway + WebSocket custom domains (REGIONAL endpoint requires cert in same account and region as the endpoint)
+- **`us-east-1`** — CloudFront (AWS hard requirement; certs must be in us-east-1)
+
+**Key constraint discovered:** ACM certificates cannot be referenced cross-account. API Gateway rejects certs from a different AWS account at deploy time. Sharing the shared-services account cert with workload API Gateway was attempted and blocked by CloudFormation. Solution: each workload account creates its own cert.
+
+| Cert | Where | Used by |
+|---|---|---|
+| `*.heediq.com` eu-west-1 | **`FoundationStack.wildcardCert`** (each workload account) | `WebSocketStack`, `ApiStack` — passed as CDK prop |
+| `*.heediq.com` us-east-1 | `WorkloadCfCertStack` (per workload account — not yet created) | `WebStack` CloudFront — needed when CloudFront custom domain is wired |
+| `*.heediq.com` eu-west-1 | `SharedServicesStack.certEuWest1` (shared-services account) | Shared-services own use — **NOT** referenced by workload stacks |
+
+The `eu-west-1` cert ARN is stored in SSM `/heediq/infra/cert-arn-eu-west-1` in each workload account and also available as `FoundationStack.wildcardCert.certificateArn` for CDK stacks.
+
+### ACM DNS validation — one-time CNAME per environment
+
+ACM generates a **unique validation CNAME per cert request** — not per domain. Two certs for `*.heediq.com` in different accounts get different CNAMEs. Since Route 53 is in shared-services, you must add the new CNAME there on first deploy.
+
+This is **one-time per cert** — ACM auto-renews using the same CNAME. It is not needed again unless FoundationStack is destroyed and recreated (which would issue a new cert with a new CNAME).
+
+#### How to add the CNAME when deploying a new environment
+
+**Step 1** — After the first `FoundationStack` deploy, get the cert's validation CNAME (the cert ARN is in the `WildcardCertArn` CloudFormation output):
+
+```bash
+aws acm describe-certificate \
+  --certificate-arn <WildcardCertArn from CFn output> \
+  --profile heediq-<env> \
+  --query "Certificate.DomainValidationOptions[0].ResourceRecord"
+```
+
+Output looks like:
+```json
+{ "Name": "_<hex>.heediq.com.", "Type": "CNAME", "Value": "_<hex>.acm-validations.aws." }
+```
+
+**Step 2** — Add the CNAME to Route 53 in shared-services:
+
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z0875312RP7WHSNW7AUM \
+  --profile heediq-shared \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "_<hex>.heediq.com.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_<hex>.acm-validations.aws."}]
+      }
+    }]
+  }'
+```
+
+Cert validates in ~5–10 minutes. CloudFormation (which waits for the cert to reach ISSUED before continuing) will unblock automatically.
+
+> **Dev cert status:** CNAME for the dev account cert was added manually on 2026-06-25. Cert is ISSUED. No action needed for dev unless FoundationStack is recreated.
+
+**Future automation:** `heediq-route53-dns-manager` IAM role is already deployed in shared-services. A CDK custom resource Lambda (next PR after this) will assume it and add CNAMEs automatically — eliminating the manual step for staging/prod.
+
+### Cross-account Route 53 DNS manager role (D-064)
+
+IAM role **`heediq-route53-dns-manager`** in shared-services account (`313828097088`):
+
+| Property | Value |
+|---|---|
+| Trust | Workload accounts: dev (`276594885933`), staging (`475790160542`), prod (`438825592314`) |
+| Permissions | `route53:ChangeResourceRecordSets`, `route53:ListResourceRecordSets`, `route53:GetChange` on `heediq.com` hosted zone only |
+| ARN in SSM | `/heediq/shared/route53-dns-manager-role-arn` |
+
+This role is the foundation for:
+1. **Automated cert validation CNAMEs** — CDK custom resource Lambda in FoundationStack assumes this role to add the CNAME on deploy (next PR)
+2. **A-alias DNS records** for all custom domains (`ws-*.heediq.com`, `api-*.heediq.com`, `*.heediq.com`) — same custom resource, also next PR
+
+Until the CDK custom resource is built, both operations are done manually via the CLI pattern above.
+
+### Pending DNS work
+
+| Record | Status | Blocker |
+|---|---|---|
+| `ws-dev.heediq.com` → API GW regional domain | **Not created** | CDK custom resource (Route 53 cross-account) |
+| `api-dev.heediq.com` → API GW regional domain | **Not created** | ApiStack custom domain not yet implemented |
+| `dev.heediq.com` → CloudFront | **Not created** | WebStack custom domain not yet implemented |
+| staging/prod equivalents | **Not created** | First deploy of those environments |
+
+---
 
 ## Testing
 
