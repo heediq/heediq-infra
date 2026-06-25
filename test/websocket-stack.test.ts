@@ -153,6 +153,35 @@ describe('WebSocketStack (dev)', () => {
     });
   });
 
+  // ── Route 53 alias record (cross-account custom resource) ────────────────
+
+  it('creates a custom resource for the Route 53 A-alias record', () => {
+    ws.hasResourceProperties('AWS::CloudFormation::CustomResource', {
+      RecordName: 'ws-dev.heediq.com',
+      HostedZoneId: 'Z0875312RP7WHSNW7AUM',
+    });
+  });
+
+  it('Route53AliasRecord handler Lambda uses Node.js 22 with 5-minute timeout', () => {
+    ws.hasResourceProperties('AWS::Lambda::Function', {
+      Runtime: 'nodejs22.x',
+      Timeout: 300,
+    });
+  });
+
+  it('Route53AliasRecord handler role has sts:AssumeRole on heediq-route53-dns-manager', () => {
+    ws.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'sts:AssumeRole',
+            Resource: 'arn:aws:iam::313828097088:role/heediq-route53-dns-manager',
+          }),
+        ]),
+      }),
+    });
+  });
+
   // ── Custom domain ──────────────────────────────────────────────────────────
 
   it('creates a custom domain name for ws-dev.heediq.com with REGIONAL endpoint', () => {
