@@ -18,8 +18,8 @@ resources themselves.
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
-- `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061, planned)
-- `lib/summarization/summarization-stack.ts` — Lambda (Claude extraction worker)
+- `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061)
+- `lib/summarization/summarization-stack.ts` — SQS queue + Lambda (Claude extraction worker, D-065)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
 
 ## Stack Map
@@ -212,7 +212,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | Task def — whisper large-v3 | `Ec2TaskDefinition`, `TIER=paid` env var, 1 GPU unit resource requirement |
 | EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; EC2 capacity provider (D-059) |
 | IAM execution role | `heediq-transcription-execution` — cross-account ECR pull (shared-services 313828097088) + CloudWatch Logs write |
-| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket) + DynamoDB write (heediq-jobs + heediq-recordings) |
+| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket) + DynamoDB write (heediq-jobs + heediq-recordings) + `sqs:SendMessage` on `heediq-summarization` (enqueues after job completes, D-065) |
 | IAM instance role | `heediq-transcription-instance` — ECS agent registration, CloudWatch Logs, SSM agent access |
 | IAM pipe role | `heediq-transcription-pipe` — SQS consume + `ecs:RunTask` + `iam:PassRole` |
 | ECR image | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription` (cross-account pull) |
@@ -316,6 +316,19 @@ Replace placeholders with real credentials from Google Cloud Console and Azure p
 
 **Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
 
+### SummarizationStack — prerequisite before first Lambda invocation
+
+The summarization Lambda IAM role has `secretsmanager:GetSecretValue` on `/heediq/summarization/*`. The stack deploys without the secret existing, but the Lambda will fail at cold-start if the secret is absent. Create it before traffic reaches the Lambda:
+
+```bash
+aws secretsmanager create-secret \
+  --name /heediq/summarization/claude-api-key \
+  --secret-string "placeholder" \
+  --profile heediq-dev
+```
+
+Replace `placeholder` with the real Anthropic API key from the Anthropic console (D-032). The Lambda Extension reads this at cold-start; rotating the secret value takes effect on the next cold-start.
+
 ## Domains, Subdomains & Certificates
 
 ### Domain & subdomain structure (D-052)
@@ -391,8 +404,6 @@ Cert validates in ~5–10 minutes. CloudFormation (which waits for the cert to r
 
 > **Dev cert status:** CNAME for the dev account cert was added manually on 2026-06-25. Cert is ISSUED. No action needed for dev unless FoundationStack is recreated.
 
-**Future automation:** `heediq-route53-dns-manager` IAM role is already deployed in shared-services. A CDK custom resource Lambda (next PR after this) will assume it and add CNAMEs automatically — eliminating the manual step for staging/prod.
-
 ### Cross-account Route 53 DNS manager role (D-064)
 
 IAM role **`heediq-route53-dns-manager`** in shared-services account (`313828097088`):
@@ -403,20 +414,213 @@ IAM role **`heediq-route53-dns-manager`** in shared-services account (`313828097
 | Permissions | `route53:ChangeResourceRecordSets`, `route53:ListResourceRecordSets`, `route53:GetChange` on `heediq.com` hosted zone only |
 | ARN in SSM | `/heediq/shared/route53-dns-manager-role-arn` |
 
-This role is the foundation for:
-1. **Automated cert validation CNAMEs** — CDK custom resource Lambda in FoundationStack assumes this role to add the CNAME on deploy (next PR)
-2. **A-alias DNS records** for all custom domains (`ws-*.heediq.com`, `api-*.heediq.com`, `*.heediq.com`) — same custom resource, also next PR
+This role enables:
+1. **ACM cert validation CNAMEs** — **still manual** (one-time per environment). ACM issues a unique CNAME per cert request; you add it to the Route 53 hosted zone in shared-services using the commands above. Once added, ACM auto-renews indefinitely using the same record — no future action needed unless FoundationStack is destroyed.
+2. **A-alias DNS records for all custom domains** (`ws-{env}.heediq.com`, `api-{env}.heediq.com`) — **automated** via the `Route53AliasRecord` CDK custom resource (PR #22, deployed). WebSocketStack and ApiStack each instantiate this construct; it assumes `heediq-route53-dns-manager` at deploy time and creates/updates the Route 53 A-alias record automatically. No manual CLI step needed for A-alias records.
 
-Until the CDK custom resource is built, both operations are done manually via the CLI pattern above.
+### DNS record status (dev)
 
-### Pending DNS work
+| Record | Status |
+|---|---|
+| `ws-dev.heediq.com` → WebSocket API GW regional domain | **Created** by Route53AliasRecord on WebSocketStack deploy |
+| `api-dev.heediq.com` → HTTP API GW regional domain | **Created** by Route53AliasRecord on ApiStack deploy |
+| `dev.heediq.com` → CloudFront | **Not created** — WebStack CloudFront custom domain not yet implemented |
 
-| Record | Status | Blocker |
+### DNS record status (staging / prod)
+
+| Record | Status |
+|---|---|
+| All records | **Not created** — environments not yet deployed |
+
+See [Setting up a new environment from scratch](#setting-up-a-new-environment-from-scratch) for the full step-by-step.
+
+---
+
+## Setting up a new environment from scratch
+
+This is the canonical playbook for deploying Heediq infrastructure to a brand-new AWS workload account (staging or prod). Run through this in order — every step depends on the previous one.
+
+### Account IDs and profiles
+
+| Environment | Account ID | AWS profile |
 |---|---|---|
-| `ws-dev.heediq.com` → API GW regional domain | **Pending deploy** | Route53AliasRecord custom resource runs on next `cdk deploy` |
-| `api-dev.heediq.com` → API GW regional domain | **Pending deploy** | Route53AliasRecord custom resource runs on next `cdk deploy` |
-| `dev.heediq.com` → CloudFront | **Not created** | WebStack custom domain not yet implemented |
-| staging/prod equivalents | **Not created** | First deploy of those environments |
+| dev | `276594885933` | `heediq-dev` |
+| staging | `475790160542` | `heediq-staging` |
+| prod | `438825592314` | `heediq-prod` |
+
+Profiles are configured by `scripts/setup-aws-profiles.sh`. SharedServicesStack was deployed once and is already live — do not redeploy it.
+
+### Prerequisites (one-time per machine)
+
+```bash
+# 1. Configure AWS SSO profiles for all 4 accounts
+bash scripts/setup-aws-profiles.sh
+
+# 2. Log in to all accounts
+aws sso login --profile heediq-shared
+aws sso login --profile heediq-staging   # or heediq-prod
+
+# 3. Bootstrap CDK in the new account (safe to run multiple times — idempotent)
+bash scripts/setup.sh
+```
+
+`scripts/setup.sh` also creates the OIDC trust for GitHub Actions and the per-service deploy roles. It must run before CI can deploy to the new account.
+
+### Step 1 — Create prerequisite secrets (before deploying any stack)
+
+These must exist before the stacks that need them are deployed. Creating them with placeholder values first allows the CDK deploy to succeed; replace placeholders with real credentials before any traffic flows.
+
+```bash
+# Auth secrets (required by FoundationStack — Cognito IdP triggers)
+aws secretsmanager create-secret --name /heediq/auth/google-client-secret \
+  --secret-string "placeholder" --profile heediq-staging
+
+aws secretsmanager create-secret --name /heediq/auth/microsoft-client-secret \
+  --secret-string "placeholder" --profile heediq-staging
+
+aws ssm put-parameter --name /heediq/auth/google-client-id \
+  --value "placeholder" --type String --profile heediq-staging
+
+aws ssm put-parameter --name /heediq/auth/microsoft-client-id \
+  --value "placeholder" --type String --profile heediq-staging
+
+# Microsoft OIDC discovery — must be a real URL, not "placeholder"
+aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
+  --value "https://login.microsoftonline.com/organizations/v2.0" \
+  --type String --profile heediq-staging
+
+# Summarization Lambda secret (required before Lambda cold-starts)
+aws secretsmanager create-secret --name /heediq/summarization/claude-api-key \
+  --secret-string "placeholder" --profile heediq-staging
+```
+
+Replace `heediq-staging` with `heediq-prod` for the prod account. Replace placeholders with real values when you have them (D-032, D-020).
+
+### Step 2 — Deploy FoundationStack
+
+```bash
+cd /path/to/heediq-infra
+pnpm run cdk deploy HeediqFoundationStack -c env=staging --profile heediq-staging
+```
+
+This creates the 5 DynamoDB tables, S3 buckets, SQS queues, Cognito user pool, SSM params, and — critically — the **ACM wildcard cert** for `*.heediq.com` in eu-west-1. The cert enters `PENDING_VALIDATION` status and CDK waits.
+
+### Step 3 — Add the ACM cert validation CNAME to Route 53 ⚠️ (manual, one-time)
+
+While CDK is waiting for the cert, open a new terminal and add the validation CNAME:
+
+**3a — Get the cert ARN from CloudFormation outputs:**
+```bash
+aws cloudformation describe-stacks \
+  --stack-name HeediqFoundationStack \
+  --profile heediq-staging \
+  --query "Stacks[0].Outputs[?OutputKey=='WildcardCertArn'].OutputValue" \
+  --output text
+```
+
+**3b — Get the validation CNAME from ACM:**
+```bash
+aws acm describe-certificate \
+  --certificate-arn <WildcardCertArn from step 3a> \
+  --profile heediq-staging \
+  --query "Certificate.DomainValidationOptions[0].ResourceRecord"
+```
+
+Output looks like:
+```json
+{ "Name": "_<hex>.heediq.com.", "Type": "CNAME", "Value": "_<hex>.acm-validations.aws." }
+```
+
+**3c — Add the CNAME to Route 53 in shared-services** (the hosted zone lives there, not in the workload account):
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z0875312RP7WHSNW7AUM \
+  --profile heediq-shared \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "_<hex>.heediq.com.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_<hex>.acm-validations.aws."}]
+      }
+    }]
+  }'
+```
+
+The cert validates in ~5–10 minutes. CDK's CloudFormation wait will unblock automatically. This CNAME is permanent and idempotent — the `UPSERT` action is safe to run again.
+
+> **Why this is manual:** ACM issues a unique validation CNAME per cert request. Two certs for `*.heediq.com` (one in dev, one in staging) get different CNAMEs. Since Route 53 is in the shared-services account, the workload CDK deploy can't add records there directly — the Route53AliasRecord custom resource handles regular A-alias records via cross-account role assumption, but cert CNAME addition has not been automated. It's a one-time step per new environment. If FoundationStack is ever destroyed and recreated, a new cert with a new CNAME is issued — repeat this step.
+
+### Step 4 — Deploy remaining stacks
+
+Once FoundationStack completes (cert ISSUED), deploy all service stacks:
+
+```bash
+pnpm run cdk deploy --all -c env=staging --profile heediq-staging \
+  --require-approval never
+```
+
+This deploys in dependency order: `HeediqTranscriptionStack`, `HeediqWebSocketStack`, `HeediqApiStack`, `HeediqSummarizationStack`. Each stack that has a custom domain (`WebSocketStack`, `ApiStack`) will invoke the `Route53AliasRecord` custom resource Lambda, which assumes `heediq-route53-dns-manager` in shared-services and creates the A-alias record automatically. **No manual DNS step needed for these.**
+
+Verify DNS records were created:
+```bash
+dig ws-staging.heediq.com A +short
+dig api-staging.heediq.com A +short
+```
+
+Both should resolve to the API Gateway regional domain CNAME (or IP if Route 53 alias resolves directly).
+
+### Step 5 — Set real secrets
+
+Replace placeholder values with actual credentials:
+
+```bash
+# Google OAuth (from Google Cloud Console → OAuth 2.0 credentials)
+aws ssm put-parameter --name /heediq/auth/google-client-id \
+  --value "<real-id>" --type String --overwrite --profile heediq-staging
+aws secretsmanager put-secret-value --secret-id /heediq/auth/google-client-secret \
+  --secret-string "<real-secret>" --profile heediq-staging
+
+# Microsoft OAuth (from Azure portal → App registrations)
+aws ssm put-parameter --name /heediq/auth/microsoft-client-id \
+  --value "<real-id>" --type String --overwrite --profile heediq-staging
+aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
+  --value "https://login.microsoftonline.com/<tenant-id>/v2.0" \
+  --type String --overwrite --profile heediq-staging
+aws secretsmanager put-secret-value --secret-id /heediq/auth/microsoft-client-secret \
+  --secret-string "<real-secret>" --profile heediq-staging
+
+# Anthropic API key (from Anthropic console)
+aws secretsmanager put-secret-value --secret-id /heediq/summarization/claude-api-key \
+  --secret-string "<real-key>" --profile heediq-staging
+```
+
+### Step 6 — Verify the deployment
+
+```bash
+# Check SSM params were created by the stacks
+aws ssm get-parameters-by-path --path /heediq --recursive \
+  --query "Parameters[].{Name:Name}" --profile heediq-staging
+
+# Expected count: ~18 params (foundation: 14, api: 2, websocket: 2, summarization: 3)
+
+# Confirm cert is ISSUED
+aws acm list-certificates --profile heediq-staging \
+  --query "CertificateSummaryList[?DomainName=='*.heediq.com']"
+
+# Confirm Route 53 A-alias records exist
+dig ws-staging.heediq.com A +short
+dig api-staging.heediq.com A +short
+```
+
+### CloudFront custom domain (not yet implemented)
+
+`HeediqWebStack` + `HeediqWorkloadCfCertStack` (us-east-1 cert) are not yet built. When they are, the setup will add:
+- A `HeediqWorkloadCfCertStack` cross-region stack in us-east-1 with another `*.heediq.com` ACM cert (requires a third CNAME for that cert — same manual process as Step 3)
+- A CloudFront distribution in `HeediqWebStack` using the us-east-1 cert
+- A Route 53 alias record for `staging.heediq.com` / `prod.heediq.com` / `dev.heediq.com` → CloudFront
 
 ---
 
