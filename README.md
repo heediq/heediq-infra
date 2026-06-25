@@ -17,7 +17,8 @@ resources themselves.
 - `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
-- `lib/transcription/transcription-stack.ts` — ECS cluster + Fargate task definitions
+- `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
+- `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061, planned)
 - `lib/summarization/summarization-stack.ts` — Lambda (Claude extraction worker)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
 
@@ -30,8 +31,9 @@ resources themselves.
 | `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito |
 | `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
-| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + Fargate task defs |
+| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
+| `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061, planned) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -183,14 +185,66 @@ Cert ARNs are in SSM (no manual step needed):
 | `/heediq/api/cognito-client-id` | Cognito App Client ID (no secret — public browser client) |
 | `/heediq/api/ses-sending-role-arn` | IAM role ARN in shared-services account for cross-account SES sending (D-058) |
 
+### TranscriptionStack resources
+
+**Architecture (D-059, D-060):**
+
+| Resource | Details |
+|---|---|
+| ECS cluster | `heediq-transcription` |
+| VPC | `heediq-transcription` — public subnets only (eu-west-1a/b), no NAT gateway |
+| CloudWatch log group | `/heediq/transcription` (30-day retention; no PII logged, D-038) |
+| EC2 instance type | g4dn.xlarge — T4 GPU (16 GB VRAM), 4 vCPU, 16 GB RAM; Spot, capacity-optimized allocation |
+| Auto Scaling Group | `heediq-transcription-asg` — min=0, max=N; managed by ECS capacity provider |
+| Launch Template | ECS-optimized GPU AMI (CUDA + nvidia-container-toolkit + ECS agent pre-configured); user-data registers instance with ECS cluster |
+| ECS capacity provider | `heediq-transcription-ec2` — managed scaling + managed termination protection |
+| Task def — whisper small | `Ec2TaskDefinition`, `TIER=free` env var, 1 GPU unit resource requirement |
+| Task def — whisper large-v3 | `Ec2TaskDefinition`, `TIER=paid` env var, 1 GPU unit resource requirement |
+| EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; EC2 capacity provider (D-059) |
+| IAM execution role | `heediq-transcription-execution` — cross-account ECR pull (shared-services 313828097088) + CloudWatch Logs write |
+| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket) + DynamoDB write (heediq-jobs + heediq-recordings) |
+| IAM instance role | `heediq-transcription-instance` — ECS agent registration, CloudWatch Logs, SSM agent access |
+| IAM pipe role | `heediq-transcription-pipe` — SQS consume + `ecs:RunTask` + `iam:PassRole` |
+| ECR image | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription` (cross-account pull) |
+
+**Message routing (D-059, D-060):** The API enqueues jobs with `messageAttributes.tier = 'free' | 'paid'`. Access to `paid` (large-v3) is enforced at the API enqueue endpoint — free users are rejected if they request it. Each EventBridge Pipe filters on tier and launches the matching task definition. No idle containers — tasks launch on demand, EC2 instance terminates after job completes.
+
+**Spot interruption:** worker catches SIGTERM → writes `status=retrying` to `heediq-jobs` → SQS message re-enqueues on visibility timeout expiry (D-059).
+
+### WebSocketStack resources (D-061, planned)
+
+> **Planned — not yet deployed.** Implementation follows TranscriptionStack GPU migration.
+
+| Resource | Details |
+|---|---|
+| WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes |
+| Connection Lambda | On `$connect`: validates JWT (query param `?token=<jwt>`), stores `connectionId` + `userId` + `orgId` + `recordingId` in `heediq-ws-connections`. On `$disconnect`: removes row. |
+| Status Pusher Lambda | Triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-recording` (PK=`recordingId`); POSTs status payload to each active `connectionId` via `execute-api:ManageConnections`. On `GoneException` (stale connection): deletes row from table. |
+| Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from SSM (D-053) |
+| IAM: pusher role | `execute-api:ManageConnections` scoped to WebSocket API ARN |
+
+**Status stages pushed to client:** `queued → starting → transcribing → diarizing (large-v3 only) → summarizing → done / failed`
+
+`starting` is written by the transcription worker as its first DynamoDB update (before model load) — surfaces EC2 cold-start as visible UX state rather than a silent wait.
+
+**New SSM params (to be added in FoundationStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` |
+| `/heediq/api/ws-endpoint-url` | WebSocket API endpoint URL (set post-deploy) |
+
 ### FoundationStack DynamoDB key design
 
-| Table | PK | SK | GSIs |
-|---|---|---|---|
-| `heediq-recordings` | `orgId` | `recordingId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) |
-| `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) |
-| `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId) |
-| `heediq-jobs` | `recordingId` | — | — |
+| Table | PK | SK | GSIs | Streams |
+|---|---|---|---|---|
+| `heediq-recordings` | `orgId` | `recordingId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | — |
+| `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) | — |
+| `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId) | — |
+| `heediq-jobs` | `recordingId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
+| `heediq-ws-connections` | `connectionId` | — | `by-recording` (PK=`recordingId`), TTL on `expiresAt` | — |
+
+`heediq-ws-connections` is a **planned addition** (D-061) — not yet deployed. Will be added to FoundationStack alongside WebSocketStack implementation.
 
 ### FoundationStack Cognito — prerequisite before first deploy
 
@@ -256,3 +310,7 @@ bash scripts/setup-budgets.sh
 - **Cross-account email sending via role assumption** (D-058) — SES identity lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. Do NOT create SES identities in workload accounts — DKIM CNAMEs would require a cross-account Route 53 update, creating a dependency from shared-services on environment stacks.
 
 - **CDK S3 event notifications use a Lambda-backed custom resource** — `bucket.addEventNotification()` does not emit `AWS::S3::BucketNotification`. The verifiable contract in CDK unit tests is the `AWS::SQS::QueuePolicy` granting `s3.amazonaws.com` SendMessage permission.
+
+- **`cdk.context.json` must include AZ entries for each workload account** — `ec2.Vpc` in an environment-bound stack triggers an AZ lookup. Without a cache entry, `cdk synth` fails in CI (which has no AWS credentials in the `validate` job, D-043). The file is committed with `eu-west-1a/b/c` for dev/staging/prod accounts. If an account is re-created or a new account is added, append the corresponding entry. Values: `"availability-zones:account=<id>:region=eu-west-1": ["eu-west-1a", "eu-west-1b", "eu-west-1c"]`
+
+- **Cross-account ECR pull from `fromRegistry` triggers a CDK warning** — `ContainerImage.fromRegistry(ecrUri)` on a cross-account ECR URI produces `[Warning] Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'`. This is expected: `fromEcrRepository` only works for same-account repos. The explicit IAM statements on the execution role (plus the repo resource policy in SharedServicesStack) provide the correct cross-account access. The warning is harmless.
