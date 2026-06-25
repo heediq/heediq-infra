@@ -158,12 +158,6 @@ export class SharedServicesStack extends cdk.Stack {
       description: 'Route 53 hosted zone ID for heediq.com',
     });
 
-    new ssm.StringParameter(this, 'CertArnEuWest1Param', {
-      parameterName: '/heediq/shared/cert-arn-eu-west-1',
-      stringValue: this.certEuWest1.certificateArn,
-      description: 'ACM wildcard cert ARN for API Gateway (eu-west-1) — D-053',
-    });
-
     // ── Outputs — capture these after first deploy ─────────────────────────────
 
     new cdk.CfnOutput(this, 'NameServers', {
@@ -178,7 +172,7 @@ export class SharedServicesStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'CertArnEuWest1', {
       value: this.certEuWest1.certificateArn,
-      description: 'ACM wildcard cert (eu-west-1) — also in SSM /heediq/shared/cert-arn-eu-west-1',
+      description: 'ACM wildcard cert (eu-west-1) — stored in config.ts SHARED_SERVICES.certArnEuWest1',
     });
 
     new cdk.CfnOutput(this, 'EcrRepoUri', {

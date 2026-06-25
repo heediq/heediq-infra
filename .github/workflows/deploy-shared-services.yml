@@ -5,7 +5,6 @@ on:
     branches: [develop]
     paths:
       - 'lib/shared-services/**'
-      - 'bin/infra.ts'
   workflow_dispatch:
 
 env:

@@ -6,7 +6,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambda_events from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS } from '../config';
+import { WorkloadEnv, DOMAINS, SHARED_SERVICES } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 
 export interface WebSocketStackProps extends cdk.StackProps {
@@ -135,16 +135,11 @@ export class WebSocketStack extends cdk.Stack {
     );
 
     // ── Custom domain (D-052, D-053) ─────────────────────────────────────────
-    const certArn = ssm.StringParameter.valueForStringParameter(
-      this,
-      '/heediq/shared/cert-arn-eu-west-1',
-    );
-
     const domainName = new apigatewayv2.CfnDomainName(this, 'DomainName', {
       domainName: wsDomain,
       domainNameConfigurations: [
         {
-          certificateArn: certArn,
+          certificateArn: SHARED_SERVICES.certArnEuWest1,
           endpointType: 'REGIONAL',
         },
       ],

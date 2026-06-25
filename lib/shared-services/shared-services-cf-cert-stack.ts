@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import { Construct } from 'constructs';
 import { DOMAINS } from '../config';
@@ -27,16 +26,9 @@ export class SharedServicesCfCertStack extends cdk.Stack {
     // Note: validation will stay PENDING until NS records are updated at registrar
     // (same prerequisite as the eu-west-1 cert)
 
-    // SSM param in us-east-1 — workload stacks read cert ARN from here at deploy time
-    new ssm.StringParameter(this, 'CertArnUsEast1Param', {
-      parameterName: '/heediq/shared/cert-arn-us-east-1',
-      stringValue: this.certUsEast1.certificateArn,
-      description: 'ACM wildcard cert ARN for CloudFront (us-east-1) — D-053',
-    });
-
     new cdk.CfnOutput(this, 'CertArnUsEast1', {
       value: this.certUsEast1.certificateArn,
-      description: 'ACM wildcard cert (us-east-1) — also in SSM /heediq/shared/cert-arn-us-east-1',
+      description: 'ACM wildcard cert (us-east-1) — stored in config.ts SHARED_SERVICES.certArnUsEast1',
     });
   }
 }
