@@ -49,7 +49,7 @@ export class TranscriptionStack extends cdk.Stack {
     const instanceSg = new ec2.SecurityGroup(this, 'TaskSg', {
       vpc,
       securityGroupName: 'heediq-transcription-task',
-      description: 'EC2 GPU transcription instance — outbound only',
+      description: 'EC2 GPU transcription instance - outbound only',
       allowAllOutbound: true,
     });
 
