@@ -153,46 +153,25 @@ describe('WebSocketStack (dev)', () => {
     });
   });
 
-  // ── Custom domain ──────────────────────────────────────────────────────────
-
-  it('creates a custom domain name for ws-dev.heediq.com with REGIONAL endpoint', () => {
-    ws.hasResourceProperties('AWS::ApiGatewayV2::DomainName', {
-      DomainName: 'ws-dev.heediq.com',
-      DomainNameConfigurations: Match.arrayWith([
-        Match.objectLike({ EndpointType: 'REGIONAL' }),
-      ]),
-    });
-  });
-
-  it('creates an API mapping for the custom domain', () => {
-    ws.resourceCountIs('AWS::ApiGatewayV2::ApiMapping', 1);
-  });
-
   // ── SSM params ─────────────────────────────────────────────────────────────
+  // Custom domain (ws-dev.heediq.com) deferred — API Gateway requires the ACM cert to be
+  // in the same account; shared-services cert cannot be referenced cross-account.
 
-  it('exports ws-endpoint-url SSM param with wss:// prefix', () => {
+  it('exports ws-endpoint-url SSM param with default API Gateway wss:// URL', () => {
     ws.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/heediq/api/ws-endpoint-url',
-      Value: 'wss://ws-dev.heediq.com',
     });
-  });
-
-  it('exports ws-regional-domain-name SSM param for Route 53 alias target', () => {
-    ws.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/heediq/api/ws-regional-domain-name',
-    });
+    ws.resourceCountIs('AWS::ApiGatewayV2::DomainName', 0);
+    ws.resourceCountIs('AWS::ApiGatewayV2::ApiMapping', 0);
   });
 });
 
 describe('WebSocketStack (prod)', () => {
-  it('uses prod domain ws.heediq.com', () => {
+  it('exports ws-endpoint-url SSM param', () => {
     const { ws } = buildTemplates('prod');
-    ws.hasResourceProperties('AWS::ApiGatewayV2::DomainName', {
-      DomainName: 'ws.heediq.com',
-    });
     ws.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/heediq/api/ws-endpoint-url',
-      Value: 'wss://ws.heediq.com',
     });
+    ws.resourceCountIs('AWS::ApiGatewayV2::DomainName', 0);
   });
 });
