@@ -1,10 +1,16 @@
 name: Deploy Shared Services
 
 on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'lib/shared-services/**'
+      - 'test/shared-services-stack.test.ts'
   push:
     branches: [develop]
     paths:
       - 'lib/shared-services/**'
+      - 'test/shared-services-stack.test.ts'
   workflow_dispatch:
 
 env:
@@ -35,6 +41,7 @@ jobs:
   deploy:
     name: Deploy → shared-services
     needs: [validate]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: shared-services
     permissions:
