@@ -30,13 +30,12 @@ export const DOMAINS = {
 } as const;
 
 // Populated after SharedServicesStack first deploy.
-// Cert ARNs are stable, non-secret infrastructure identifiers — stored here per D-038.
-// SSM cross-account reads are not possible at CDK deploy time (valueForStringParameter
-// resolves in the deploying account only, not in shared-services).
 export const SHARED_SERVICES = {
   hostedZoneId: 'Z0875312RP7WHSNW7AUM',
-  certArnEuWest1: 'arn:aws:acm:eu-west-1:313828097088:certificate/38f34fb6-a90b-4c74-9e97-7c9242ec88ed',
-  certArnUsEast1: 'arn:aws:acm:us-east-1:313828097088:certificate/7c0fdf03-1d8c-42c0-8b6b-ef0fc12da4fb',
+  // Cert ARNs are NOT stored here — certs live in each workload account (FoundationStack)
+  // so API Gateway and CloudFront can reference them same-account (D-053).
+  // eu-west-1 wildcard cert: FoundationStack.wildcardCert (passed as CDK prop)
+  // us-east-1 wildcard cert: WorkloadCfCertStack (to be created when WebStack needs it)
 } as const;
 
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.

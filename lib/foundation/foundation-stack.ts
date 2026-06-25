@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
@@ -14,6 +15,9 @@ export interface FoundationStackProps extends cdk.StackProps {
 
 export class FoundationStack extends cdk.Stack {
   readonly workloadEnv: WorkloadEnv;
+
+  // ACM wildcard cert (eu-west-1) — API Gateway and WebSocket custom domains (D-053)
+  readonly wildcardCert: acm.Certificate;
 
   // DynamoDB — multi-table (D-031)
   readonly recordingsTable: dynamodb.Table;
@@ -39,6 +43,27 @@ export class FoundationStack extends cdk.Stack {
 
     const isProd = props.workloadEnv === 'prod';
     const removalPolicy = isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
+
+    // ── ACM wildcard cert (eu-west-1) — API Gateway + WebSocket custom domains (D-053) ──
+    // DNS validation CNAME for *.heediq.com already exists in Route 53 (shared-services
+    // account). ACM derives the same CNAME regardless of which account the cert lives in —
+    // so this cert will auto-validate without any DNS change needed.
+    this.wildcardCert = new acm.Certificate(this, 'WildcardCert', {
+      domainName: `*.${DOMAINS.root}`,
+      subjectAlternativeNames: [DOMAINS.root],
+      validation: acm.CertificateValidation.fromDns(), // CNAME already in Route 53
+    });
+
+    new ssm.StringParameter(this, 'WildcardCertArnParam', {
+      parameterName: '/heediq/infra/cert-arn-eu-west-1',
+      stringValue: this.wildcardCert.certificateArn,
+      description: 'ACM wildcard cert ARN (eu-west-1) — API Gateway and WebSocket custom domains',
+    });
+
+    new cdk.CfnOutput(this, 'WildcardCertArn', {
+      value: this.wildcardCert.certificateArn,
+      description: 'ACM wildcard cert (eu-west-1) for API Gateway and WebSocket custom domains',
+    });
 
     // ── DynamoDB — multi-table, PAY_PER_REQUEST, PITR on all (D-031, D-055, D-021) ──
 

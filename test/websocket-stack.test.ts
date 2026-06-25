@@ -153,25 +153,46 @@ describe('WebSocketStack (dev)', () => {
     });
   });
 
-  // ── SSM params ─────────────────────────────────────────────────────────────
-  // Custom domain (ws-dev.heediq.com) deferred — API Gateway requires the ACM cert to be
-  // in the same account; shared-services cert cannot be referenced cross-account.
+  // ── Custom domain ──────────────────────────────────────────────────────────
 
-  it('exports ws-endpoint-url SSM param with default API Gateway wss:// URL', () => {
+  it('creates a custom domain name for ws-dev.heediq.com with REGIONAL endpoint', () => {
+    ws.hasResourceProperties('AWS::ApiGatewayV2::DomainName', {
+      DomainName: 'ws-dev.heediq.com',
+      DomainNameConfigurations: Match.arrayWith([
+        Match.objectLike({ EndpointType: 'REGIONAL' }),
+      ]),
+    });
+  });
+
+  it('creates an API mapping binding the stage to the custom domain', () => {
+    ws.resourceCountIs('AWS::ApiGatewayV2::ApiMapping', 1);
+  });
+
+  // ── SSM params ─────────────────────────────────────────────────────────────
+
+  it('exports ws-endpoint-url SSM param with custom domain wss:// URL', () => {
     ws.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/heediq/api/ws-endpoint-url',
+      Value: 'wss://ws-dev.heediq.com',
     });
-    ws.resourceCountIs('AWS::ApiGatewayV2::DomainName', 0);
-    ws.resourceCountIs('AWS::ApiGatewayV2::ApiMapping', 0);
+  });
+
+  it('exports ws-regional-domain-name SSM param for Route 53 alias target', () => {
+    ws.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/heediq/api/ws-regional-domain-name',
+    });
   });
 });
 
 describe('WebSocketStack (prod)', () => {
-  it('exports ws-endpoint-url SSM param', () => {
+  it('uses prod domain ws.heediq.com', () => {
     const { ws } = buildTemplates('prod');
+    ws.hasResourceProperties('AWS::ApiGatewayV2::DomainName', {
+      DomainName: 'ws.heediq.com',
+    });
     ws.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/heediq/api/ws-endpoint-url',
+      Value: 'wss://ws.heediq.com',
     });
-    ws.resourceCountIs('AWS::ApiGatewayV2::DomainName', 0);
   });
 });
