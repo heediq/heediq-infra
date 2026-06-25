@@ -22,6 +22,11 @@ export const DOMAINS = {
     staging: 'api-staging.heediq.com',
     dev:     'api-dev.heediq.com',
   } satisfies Record<WorkloadEnv, string>,
+  ws: {
+    prod:    'ws.heediq.com',
+    staging: 'ws-staging.heediq.com',
+    dev:     'ws-dev.heediq.com',
+  } satisfies Record<WorkloadEnv, string>,
 } as const;
 
 // Populated after SharedServicesStack first deploy.

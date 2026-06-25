@@ -20,6 +20,7 @@ export class FoundationStack extends cdk.Stack {
   readonly orgsTable: dynamodb.Table;
   readonly usersTable: dynamodb.Table;
   readonly jobsTable: dynamodb.Table;
+  readonly wsConnectionsTable: dynamodb.Table;
 
   // S3
   readonly audioUploadsBucket: s3.Bucket;
@@ -89,13 +90,28 @@ export class FoundationStack extends cdk.Stack {
       sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
     });
 
-    // PK = recordingId — client polls by recordingId; one active job per recording at MVP (D-023)
+    // PK = recordingId — one active job per recording at MVP; DDB Streams feeds StatusPusher (D-061)
     this.jobsTable = new dynamodb.Table(this, 'JobsTable', {
       tableName: 'heediq-jobs',
       partitionKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      stream: dynamodb.StreamViewType.NEW_IMAGE,
       removalPolicy,
+    });
+
+    // PK = connectionId; GSI by-recording for fan-out; TTL cleans up stale rows (D-061)
+    this.wsConnectionsTable = new dynamodb.Table(this, 'WsConnectionsTable', {
+      tableName: 'heediq-ws-connections',
+      partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy,
+    });
+    this.wsConnectionsTable.addGlobalSecondaryIndex({
+      indexName: 'by-recording',
+      partitionKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
     });
 
     // ── SQS — transcription queue (D-023) ────────────────────────────────────
@@ -271,7 +287,8 @@ export class FoundationStack extends cdk.Stack {
       ['/heediq/api/cognito-user-pool-arn',  this.userPool.userPoolArn,            'Cognito User Pool ARN'],
       ['/heediq/api/cognito-client-id',      this.userPoolClient.userPoolClientId, 'Cognito App Client ID'],
       // Deterministic ARN — role created in SharedServicesStack (D-058)
-      ['/heediq/api/ses-sending-role-arn',   `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`, 'Cross-account IAM role for SES email sending'],
+      ['/heediq/api/ses-sending-role-arn',        `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`, 'Cross-account IAM role for SES email sending'],
+      ['/heediq/api/ws-connections-table-name',   this.wsConnectionsTable.tableName,              'DynamoDB WebSocket connections table name'],
     ];
 
     for (const [name, value, description] of ssmParams) {
