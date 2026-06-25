@@ -141,6 +141,45 @@ export class SharedServicesStack extends cdk.Stack {
       description: 'IAM role assumed by workload Lambdas for cross-account SES sending (D-058)',
     });
 
+    // ── Route 53 cross-account DNS manager role ───────────────────────────────
+    // Workload account Lambdas (CDK custom resources) assume this role to:
+    //   (a) add ACM cert validation CNAMEs to this hosted zone
+    //   (b) create A-alias records for custom domains (ws/api/web per env)
+    // Scoped to ChangeResourceRecordSets on this hosted zone only.
+
+    const route53DnsManagerRole = new iam.Role(this, 'Route53DnsManagerRole', {
+      roleName: 'heediq-route53-dns-manager',
+      assumedBy: new iam.CompositePrincipal(
+        new iam.AccountPrincipal(ACCOUNTS.dev),
+        new iam.AccountPrincipal(ACCOUNTS.staging),
+        new iam.AccountPrincipal(ACCOUNTS.prod),
+      ),
+      description: 'Assumed by workload CDK custom resources to manage DNS records in shared-services Route 53',
+    });
+
+    route53DnsManagerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'route53:ChangeResourceRecordSets',
+        'route53:ListResourceRecordSets',
+        'route53:GetChange',
+      ],
+      resources: [
+        this.hostedZone.hostedZoneArn,
+        'arn:aws:route53:::change/*', // GetChange requires the change ARN
+      ],
+    }));
+
+    new ssm.StringParameter(this, 'Route53DnsManagerRoleArnParam', {
+      parameterName: '/heediq/shared/route53-dns-manager-role-arn',
+      stringValue: route53DnsManagerRole.roleArn,
+      description: 'IAM role assumed by workload CDK custom resources to manage Route 53 DNS records',
+    });
+
+    new cdk.CfnOutput(this, 'Route53DnsManagerRoleArn', {
+      value: route53DnsManagerRole.roleArn,
+      description: 'Cross-account Route 53 DNS manager role ARN — used by workload cert validation and domain record CDK custom resources',
+    });
+
     // ── ACM — wildcard cert eu-west-1 for API Gateway (D-053) ─────────────────
 
     this.certEuWest1 = new acm.Certificate(this, 'WildcardCertEuWest1', {
@@ -172,7 +211,7 @@ export class SharedServicesStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'CertArnEuWest1', {
       value: this.certEuWest1.certificateArn,
-      description: 'ACM wildcard cert (eu-west-1) — stored in config.ts SHARED_SERVICES.certArnEuWest1',
+      description: 'ACM wildcard cert (eu-west-1) for shared-services use only — workload account certs live in FoundationStack',
     });
 
     new cdk.CfnOutput(this, 'EcrRepoUri', {
