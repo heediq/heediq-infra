@@ -15,6 +15,22 @@ describe('FoundationStack (dev)', () => {
     template = Template.fromStack(stack);
   });
 
+  // ── ACM cert ───────────────────────────────────────────────────────────────
+
+  it('creates a wildcard ACM cert with DNS validation for *.heediq.com', () => {
+    template.hasResourceProperties('AWS::CertificateManager::Certificate', {
+      DomainName: '*.heediq.com',
+      SubjectAlternativeNames: ['heediq.com'],
+      ValidationMethod: 'DNS',
+    });
+  });
+
+  it('exports wildcard cert ARN to SSM /heediq/infra/cert-arn-eu-west-1', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/heediq/infra/cert-arn-eu-west-1',
+    });
+  });
+
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
   it('creates 5 DynamoDB tables', () => {
@@ -198,8 +214,9 @@ describe('FoundationStack (dev)', () => {
 
   // ── SSM params ─────────────────────────────────────────────────────────────
 
-  it('exports all 13 required SSM parameters', () => {
+  it('exports all 14 required SSM parameters', () => {
     const expectedParams = [
+      '/heediq/infra/cert-arn-eu-west-1',
       '/heediq/api/recordings-table-name',
       '/heediq/api/orgs-table-name',
       '/heediq/api/users-table-name',
