@@ -110,6 +110,17 @@ export class TranscriptionStack extends cdk.Stack {
     foundation.jobsTable.grantWriteData(taskRole);
     foundation.recordingsTable.grantWriteData(taskRole);
 
+    // SQS — enqueue to summarization queue when transcription completes (D-065)
+    // ARN constructed from known constants — no CDK cross-stack dependency needed.
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'],
+        resources: [
+          `arn:aws:sqs:${AWS_REGION}:${ACCOUNTS[props.workloadEnv]}:heediq-summarization`,
+        ],
+      }),
+    );
+
     // ── Task definitions (D-059, D-060, D-062) ────────────────────────────────
     // EC2 task definitions with gpuCount=1 per container. ECS GPU resource tracking ensures
     // at most one task runs per g4dn.xlarge instance (1 GPU per instance).
@@ -123,6 +134,8 @@ export class TranscriptionStack extends cdk.Stack {
       JOBS_TABLE_NAME: foundation.jobsTable.tableName,
       RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
       AUDIO_BUCKET_NAME: foundation.audioUploadsBucket.bucketName,
+      // Summarization queue URL — enqueue after transcription completes (D-065)
+      SUMMARIZATION_QUEUE_URL: `https://sqs.${AWS_REGION}.amazonaws.com/${ACCOUNTS[props.workloadEnv]}/heediq-summarization`,
     };
 
     // Free tier: whisper small — 1 vCPU / 2 GB / 1 GPU (D-059, D-062)
