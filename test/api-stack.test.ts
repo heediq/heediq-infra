@@ -143,6 +143,30 @@ describe('ApiStack (dev)', () => {
     });
   });
 
+  it('API Lambda role has sqs:SendMessage on heediq-summarization queue (D-065)', () => {
+    api.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'sqs:SendMessage',
+            Resource: Match.stringLikeRegexp('heediq-summarization'),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('API Lambda environment includes SUMMARIZATION_QUEUE_URL (D-065)', () => {
+    api.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-api',
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({
+          SUMMARIZATION_QUEUE_URL: Match.stringLikeRegexp('heediq-summarization'),
+        }),
+      }),
+    });
+  });
+
   // ── Custom domain ──────────────────────────────────────────────────────────
 
   it('creates a custom domain name for api-dev.heediq.com with REGIONAL endpoint', () => {

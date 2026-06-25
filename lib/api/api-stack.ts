@@ -33,14 +33,16 @@ export class ApiStack extends cdk.Stack {
       memorySize: COMPUTE.lambda.api.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.api.timeoutSecs),
       environment: {
-        RECORDINGS_TABLE:        props.foundation.recordingsTable.tableName,
-        ORGS_TABLE:              props.foundation.orgsTable.tableName,
-        USERS_TABLE:             props.foundation.usersTable.tableName,
-        JOBS_TABLE:              props.foundation.jobsTable.tableName,
-        AUDIO_BUCKET:            props.foundation.audioUploadsBucket.bucketName,
-        TRANSCRIPTION_QUEUE_URL: props.foundation.transcriptionQueue.queueUrl,
-        COGNITO_USER_POOL_ID:    props.foundation.userPool.userPoolId,
-        COGNITO_CLIENT_ID:       props.foundation.userPoolClient.userPoolClientId,
+        RECORDINGS_TABLE:          props.foundation.recordingsTable.tableName,
+        ORGS_TABLE:                props.foundation.orgsTable.tableName,
+        USERS_TABLE:               props.foundation.usersTable.tableName,
+        JOBS_TABLE:                props.foundation.jobsTable.tableName,
+        AUDIO_BUCKET:              props.foundation.audioUploadsBucket.bucketName,
+        TRANSCRIPTION_QUEUE_URL:   props.foundation.transcriptionQueue.queueUrl,
+        COGNITO_USER_POOL_ID:      props.foundation.userPool.userPoolId,
+        COGNITO_CLIENT_ID:         props.foundation.userPoolClient.userPoolClientId,
+        // Summarization queue — direct path for non-audio sources (D-065, D-026)
+        SUMMARIZATION_QUEUE_URL:   `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-summarization`,
       },
     });
 
@@ -74,6 +76,17 @@ export class ApiStack extends cdk.Stack {
         actions: ['sts:AssumeRole'],
         resources: [
           `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`,
+        ],
+      }),
+    );
+
+    // SQS — enqueue to summarization queue for non-audio sources (D-065)
+    // Text files, PDFs, emails, Excel etc. skip transcription and go direct to summarization.
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'],
+        resources: [
+          `arn:aws:sqs:${this.region}:${this.account}:heediq-summarization`,
         ],
       }),
     );

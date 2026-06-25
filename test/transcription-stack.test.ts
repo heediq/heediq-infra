@@ -281,6 +281,19 @@ describe('TranscriptionStack', () => {
     });
   });
 
+  it('task role policy grants sqs:SendMessage on heediq-summarization queue (D-065)', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'sqs:SendMessage',
+            Resource: Match.stringLikeRegexp('heediq-summarization'),
+          }),
+        ]),
+      }),
+    });
+  });
+
   // ── EventBridge Pipes ───────────────────────────────────────────────────────
 
   it('creates 2 EventBridge Pipes', () => {
