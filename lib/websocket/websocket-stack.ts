@@ -6,8 +6,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambda_events from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS } from '../config';
+import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
+import { Route53AliasRecord } from '../shared/route53-alias-record';
 
 export interface WebSocketStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
@@ -152,9 +153,14 @@ export class WebSocketStack extends cdk.Stack {
       stage: stage.ref,
     });
 
-    // TODO: Route 53 A-alias record → domainName.attrRegionalDomainName
-    // Requires cross-account grants on the shared-services hosted zone.
-    // Add when Route 53 cross-account IAM grants are set up (same work as ApiStack / WebStack).
+    // Route 53 A-alias record — ws-{env}.heediq.com → API Gateway regional endpoint (D-064)
+    new Route53AliasRecord(this, 'WsAliasRecord', {
+      recordName: wsDomain,
+      targetDnsName: domainName.attrRegionalDomainName,
+      targetHostedZoneId: domainName.attrRegionalHostedZoneId,
+      hostedZoneId: SHARED_SERVICES.hostedZoneId,
+      dnsManagerRoleArn: `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-route53-dns-manager`,
+    });
 
     // ── SSM params (D-038) ────────────────────────────────────────────────────
 
