@@ -29,11 +29,11 @@ resources themselves.
 | `HeediqSharedServicesStack` | `313828097088` | eu-west-1 | ECR, Route 53, SES identity + DKIM, cross-account email role, Route 53 DNS manager role, ACM wildcard cert (shared-services own use only) |
 | `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
 | `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, ACM wildcard cert eu-west-1 (workload custom domains — D-063) |
-| `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
+| `HeediqApiStack` | per env | eu-west-1 | Lambda (Hono) + HTTP API + custom domain api-{env}.heediq.com (D-034, D-052) |
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
-| `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061, planned) |
+| `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -240,9 +240,23 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | SSM path | Value |
 |---|---|
 | `/heediq/api/ws-endpoint-url` | `wss://ws-{env}.heediq.com` — consumed by `heediq-web` and `heediq-api` |
-| `/heediq/api/ws-regional-domain-name` | API Gateway regional domain name — Route 53 A-alias target (pending DNS record creation) |
+| `/heediq/api/ws-regional-domain-name` | API Gateway regional domain name — Route 53 A-alias target |
 
-> **Pending:** Route 53 A-alias records for `ws-*.heediq.com` → API Gateway regional domain name. Requires CDK custom resource that assumes `heediq-route53-dns-manager` role. See [Domains, Subdomains & Certificates](#domains-subdomains--certificates).
+### ApiStack resources (D-034, D-041, D-042, D-052)
+
+| Resource | Details |
+|---|---|
+| API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
+| HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
+| Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
+| IAM: Lambda role | DynamoDB read/write: recordings, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue. `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+
+**SSM params (ApiStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/api/endpoint-url` | `https://api-{env}.heediq.com` — consumed by `heediq-web` |
+| `/heediq/api/regional-domain-name` | API Gateway REST regional domain name — Route 53 A-alias target |
 
 ### FoundationStack DynamoDB key design
 
@@ -374,8 +388,8 @@ Until the CDK custom resource is built, both operations are done manually via th
 
 | Record | Status | Blocker |
 |---|---|---|
-| `ws-dev.heediq.com` → API GW regional domain | **Not created** | CDK custom resource (Route 53 cross-account) |
-| `api-dev.heediq.com` → API GW regional domain | **Not created** | ApiStack custom domain not yet implemented |
+| `ws-dev.heediq.com` → API GW regional domain | **Pending deploy** | Route53AliasRecord custom resource runs on next `cdk deploy` |
+| `api-dev.heediq.com` → API GW regional domain | **Pending deploy** | Route53AliasRecord custom resource runs on next `cdk deploy` |
 | `dev.heediq.com` → CloudFront | **Not created** | WebStack custom domain not yet implemented |
 | staging/prod equivalents | **Not created** | First deploy of those environments |
 
