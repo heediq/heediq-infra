@@ -38,14 +38,17 @@ export const EMAIL = {
   zohoDkimKey: 'v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCGr9b9Y2d9Be+M8Q1AaeXUfI7ofWZSCNiS8b2Y2VtpyyO0OtkLa2ORZ7wujPFfCIRhNumqRl7f9qUT04qqydkL8/76kbjCHvgD/JobYIw6VhJ5WJ72lll0MMvvGgWS07QHwMQDMLNNBJ7eC4a6GH25FDGYb/1g2e7+udzwZRp+XwIDAQAB', // e.g. "v=DKIM1; k=rsa; p=<key>"
 } as const;
 
-// D-055 — all environments use identical sizing at launch; scale when metrics demand it
+// D-055 / D-059 — all environments use identical sizing at launch; scale when metrics demand it
 export const COMPUTE = {
   lambda: {
     api:           { memoryMB: 512, timeoutSecs: 30  },
     summarization: { memoryMB: 512, timeoutSecs: 300 },
   },
-  fargate: {
-    free: { cpu: 1024, memoryMiB: 2048 }, // 1 vCPU, 2 GB — whisper small CPU
-    paid: { cpu: 4096, memoryMiB: 8192 }, // 4 vCPU, 8 GB — whisper large-v3 + pyannote CPU
+  // D-059: EC2 GPU Spot (g4dn.xlarge). One ASG, one capacity provider — both tiers share the pool.
+  // Model choice (free=small / paid=large-v3+pyannote) is enforced at API layer (D-060).
+  gpu: {
+    instanceType: 'g4dn.xlarge',           // smallest CUDA instance on AWS; 1 T4 GPU, 4 vCPU, 16 GB RAM
+    free: { cpu: 1024, memoryMiB: 2048 }, // 1 vCPU / 2 GB reserved — whisper small
+    paid: { cpu: 4096, memoryMiB: 8192 }, // 4 vCPU / 8 GB reserved — whisper large-v3 + pyannote
   },
 } as const;
