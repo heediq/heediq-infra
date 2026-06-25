@@ -85,6 +85,40 @@ describe('SharedServicesStack', () => {
     });
   });
 
+  // ── Route 53 DNS manager role ──────────────────────────────────────────────
+
+  it('creates heediq-route53-dns-manager role trusted by all 3 workload accounts', () => {
+    template.hasResourceProperties('AWS::IAM::Role', {
+      RoleName: 'heediq-route53-dns-manager',
+    });
+    const roles = template.findResources('AWS::IAM::Role', {
+      Properties: { RoleName: 'heediq-route53-dns-manager' },
+    });
+    const statements = Object.values(roles)[0].Properties.AssumeRolePolicyDocument.Statement;
+    expect(statements.length).toBe(3);
+  });
+
+  it('DNS manager role policy allows ChangeResourceRecordSets + GetChange on the hosted zone', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith([
+              'route53:ChangeResourceRecordSets',
+              'route53:GetChange',
+            ]),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('exports DNS manager role ARN to SSM /heediq/shared/route53-dns-manager-role-arn', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/heediq/shared/route53-dns-manager-role-arn',
+    });
+  });
+
   // ── ACM ────────────────────────────────────────────────────────────────────
 
   it('creates ACM wildcard certificate for heediq.com', () => {
