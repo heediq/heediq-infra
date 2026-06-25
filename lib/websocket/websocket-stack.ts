@@ -6,7 +6,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambda_events from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS, SHARED_SERVICES } from '../config';
+import { WorkloadEnv } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 
 export interface WebSocketStackProps extends cdk.StackProps {
@@ -17,8 +17,6 @@ export interface WebSocketStackProps extends cdk.StackProps {
 export class WebSocketStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: WebSocketStackProps) {
     super(scope, id, props);
-
-    const wsDomain = DOMAINS.ws[props.workloadEnv];
 
     // ── Connection Lambda — $connect / $disconnect / $default (D-061) ──────────
     // Actual implementation deployed by app repo CI. This construct owns the IAM role,
@@ -134,40 +132,16 @@ export class WebSocketStack extends cdk.Stack {
       }),
     );
 
-    // ── Custom domain (D-052, D-053) ─────────────────────────────────────────
-    const domainName = new apigatewayv2.CfnDomainName(this, 'DomainName', {
-      domainName: wsDomain,
-      domainNameConfigurations: [
-        {
-          certificateArn: SHARED_SERVICES.certArnEuWest1,
-          endpointType: 'REGIONAL',
-        },
-      ],
-    });
-
-    new apigatewayv2.CfnApiMapping(this, 'ApiMapping', {
-      apiId: wsApi.ref,
-      domainName: domainName.ref,
-      stage: stage.ref,
-    });
-
-    // TODO: Route 53 A-alias record → domainName.attrRegionalDomainName
-    // Requires cross-account grants on the shared-services hosted zone (standing note in WIP plan).
-    // Add when cross-account Route 53 IAM grants are set up (same pattern as ApiStack / WebStack).
-
     // ── SSM params (D-038) ────────────────────────────────────────────────────
+    // Custom domain (ws-dev/staging/prod.heediq.com) deferred — API Gateway requires the ACM cert
+    // to be in the same account; shared-services cert can't be referenced cross-account.
+    // Custom domains added when per-workload-account cert management is in place (same work as
+    // ApiStack and WebStack domain setup).
 
     new ssm.StringParameter(this, 'WsEndpointUrlParam', {
       parameterName: '/heediq/api/ws-endpoint-url',
-      stringValue: `wss://${wsDomain}`,
-      description: 'WebSocket API endpoint URL (wss://)',
-    });
-
-    // Regional domain name for Route 53 alias target (stored so it survives stack drifts)
-    new ssm.StringParameter(this, 'WsRegionalDomainParam', {
-      parameterName: '/heediq/api/ws-regional-domain-name',
-      stringValue: domainName.attrRegionalDomainName,
-      description: 'API Gateway WebSocket regional domain name (Route 53 alias target)',
+      stringValue: `wss://${wsApi.attrApiEndpoint.replace('https://', '')}/ws`,
+      description: 'WebSocket API default endpoint URL (wss://) — custom domain deferred',
     });
   }
 }
