@@ -242,6 +242,31 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | `/heediq/api/ws-endpoint-url` | `wss://ws-{env}.heediq.com` — consumed by `heediq-web` and `heediq-api` |
 | `/heediq/api/ws-regional-domain-name` | API Gateway regional domain name — Route 53 A-alias target |
 
+### SummarizationStack resources (D-032, D-055, D-065)
+
+Source-agnostic summarization pipeline. All content types — audio transcripts, text files, PDFs, emails, Excel — enqueue to the same SQS queue. The Lambda calls the Claude API and writes structured extraction output to DynamoDB.
+
+| Resource | Details |
+|---|---|
+| SQS queue | `heediq-summarization` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
+| DLQ | `heediq-summarization-dlq` — 14-day retention; receives after 3 failed attempts |
+| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
+| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-recordings` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
+
+**Message flow (D-065):**
+- Audio path: transcription worker → enqueues `{ sourceType: 'transcript', contentRef: s3://... }` after faster-whisper completes
+- Direct path: API Lambda → enqueues `{ sourceType: 'text|pdf|email|...', contentRef: s3://... }` for non-audio sources (D-026)
+
+**Cross-stack IAM (no CDK dependency required):** `heediq-summarization` queue ARN is deterministic (`arn:aws:sqs:{region}:{account}:heediq-summarization`) — TranscriptionStack task role and ApiStack Lambda role each receive `sqs:SendMessage` using the constructed ARN. Both also receive `SUMMARIZATION_QUEUE_URL` as an env var.
+
+**SSM params (SummarizationStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/summarization/queue-url` | SQS queue URL — enqueue target for all content sources |
+| `/heediq/summarization/queue-arn` | SQS queue ARN |
+| `/heediq/infra/summarization-lambda-arn` | Lambda ARN — consumed by future orchestration |
+
 ### ApiStack resources (D-034, D-041, D-042, D-052)
 
 | Resource | Details |
@@ -249,7 +274,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: Lambda role | DynamoDB read/write: recordings, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue. `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| IAM: Lambda role | DynamoDB read/write: recordings, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
 
 **SSM params (ApiStack):**
 
