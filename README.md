@@ -17,7 +17,7 @@ resources themselves.
 - `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
-- `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot task definitions (D-059; currently deployed as Fargate, GPU migration pending)
+- `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
 - `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061, planned)
 - `lib/summarization/summarization-stack.ts` — Lambda (Claude extraction worker)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
@@ -31,7 +31,7 @@ resources themselves.
 | `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito |
 | `HeediqApiStack` | per env | eu-west-1 | Lambda + API Gateway |
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
-| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059; Fargate→GPU migration pending) |
+| `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
 | `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061, planned) |
 
@@ -187,9 +187,7 @@ Cert ARNs are in SSM (no manual step needed):
 
 ### TranscriptionStack resources
 
-> **⚠️ Migration in progress (D-059):** currently deployed as Fargate Spot (PR #11). Target architecture is EC2 GPU Spot below — implementation pending on a new feature branch.
-
-**Target architecture (D-059, D-060):**
+**Architecture (D-059, D-060):**
 
 | Resource | Details |
 |---|---|
