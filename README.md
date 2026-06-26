@@ -30,9 +30,10 @@ resources themselves.
 | `HeediqSharedServicesCfCertStack` | `313828097088` | us-east-1 | ACM cert for CloudFront (must be us-east-1) |
 | `HeediqFoundationStack` | per env | eu-west-1 | DynamoDB, S3, SQS, Cognito, ACM wildcard cert eu-west-1 (workload custom domains — D-063) |
 | `HeediqApiStack` | per env | eu-west-1 | Lambda (Hono) + HTTP API + custom domain api-{env}.heediq.com (D-034, D-052) |
-| `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 |
+| `HeediqWorkloadCfCertStack` | per env | **us-east-1** | ACM wildcard cert for CloudFront (D-053) — cross-region, cert ARN passed to WebStack via CDK crossRegionReferences |
+| `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 OAC + custom domain + security headers (D-053, D-055) |
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
-| `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker) |
+| `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker, D-065) |
 | `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
@@ -283,6 +284,39 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | `/heediq/api/endpoint-url` | `https://api-{env}.heediq.com` — consumed by `heediq-web` |
 | `/heediq/api/regional-domain-name` | API Gateway REST regional domain name — Route 53 A-alias target |
 
+### WorkloadCfCertStack resources (D-053)
+
+ACM wildcard cert (`*.heediq.com` + `heediq.com`) in **us-east-1** per workload account. Required by CloudFront — AWS hard requirement. Deployed to `us-east-1` of each workload account alongside the eu-west-1 stacks.
+
+| Resource | Details |
+|---|---|
+| ACM cert | `*.heediq.com` + SAN `heediq.com` — DNS validation, `fromDns()` without hosted zone arg (manual CNAME required, see [Setting up a new environment from scratch](#setting-up-a-new-environment-from-scratch)) |
+| SSM param | `/heediq/infra/cert-arn-us-east-1` (in us-east-1) — manual reference; runtime CDK access is via prop |
+| CDK output | `CloudFrontCertArn` — passed to WebStack as `cfCert` prop via `crossRegionReferences: true` |
+
+**Note:** ACM generates a unique CNAME for this cert — different from the eu-west-1 cert CNAME. Both CNAMEs must be added to Route 53 in shared-services for a new environment to go fully live.
+
+### WebStack resources (D-053, D-055)
+
+CloudFront distribution serving the React PWA from S3. Static assets are deployed by `heediq-web` CI (S3 sync of Vite build output) — this stack provisions the infrastructure only.
+
+| Resource | Details |
+|---|---|
+| CloudFront distribution | `heediq.com` / `staging.heediq.com` / `dev.heediq.com`; `PriceClass_100` (US + EU, D-055); HTTP/2 + HTTP/3; default root `index.html` |
+| S3 origin | `heediq-web-assets-{accountId}` with OAC (Origin Access Control). Bucket policy (source-account condition) lives in FoundationStack to avoid circular CDK dep — see `lib/foundation/foundation-stack.ts` comment. |
+| OAC | `S3OriginAccessControl`, SIGV4 signing — replaces legacy OAI |
+| SPA routing | 403 + 404 from S3 → `/index.html` HTTP 200 (client-side React Router handles the path) |
+| Security headers | HSTS (1yr, includeSubdomains), X-Frame-Options DENY, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy strict-origin-when-cross-origin |
+| Custom domain | `Route53AliasRecord` → CloudFront (targetHostedZoneId `Z2FDTNDATAQYW2` — CloudFront's global fixed zone ID) |
+| ACM cert | `WorkloadCfCertStack.cfCert` (us-east-1) passed as CDK prop via `crossRegionReferences` |
+
+**SSM params (WebStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/web/url` | `https://{web-domain}` — consumed by `heediq-api` (CORS) and `heediq-web` (runtime config) |
+| `/heediq/web/cloudfront-distribution-id` | Distribution ID — used by `heediq-web` CI for `aws cloudfront create-invalidation` |
+
 ### FoundationStack DynamoDB key design
 
 | Table | PK | SK | GSIs | Streams |
@@ -354,16 +388,18 @@ Two cert regions:
 | Cert | Where | Used by |
 |---|---|---|
 | `*.heediq.com` eu-west-1 | **`FoundationStack.wildcardCert`** (each workload account) | `WebSocketStack`, `ApiStack` — passed as CDK prop |
-| `*.heediq.com` us-east-1 | `WorkloadCfCertStack` (per workload account — not yet created) | `WebStack` CloudFront — needed when CloudFront custom domain is wired |
+| `*.heediq.com` us-east-1 | **`WorkloadCfCertStack.cfCert`** (each workload account) | `WebStack` CloudFront — passed as CDK prop via CDK crossRegionReferences |
 | `*.heediq.com` eu-west-1 | `SharedServicesStack.certEuWest1` (shared-services account) | Shared-services own use — **NOT** referenced by workload stacks |
 
 The `eu-west-1` cert ARN is stored in SSM `/heediq/infra/cert-arn-eu-west-1` in each workload account and also available as `FoundationStack.wildcardCert.certificateArn` for CDK stacks.
 
+The `us-east-1` cert ARN is stored in SSM `/heediq/infra/cert-arn-us-east-1` (in us-east-1) in each workload account. For CDK stacks it is passed as a prop via `crossRegionReferences: true` (SSM-backed cross-region parameter exchange between the WorkloadCfCertStack in us-east-1 and WebStack in eu-west-1).
+
 ### ACM DNS validation — one-time CNAME per environment
 
-ACM generates a **unique validation CNAME per cert request** — not per domain. Two certs for `*.heediq.com` in different accounts get different CNAMEs. Since Route 53 is in shared-services, you must add the new CNAME there on first deploy.
+ACM generates a **unique validation CNAME per cert request** — not per domain. Each environment now has **two** certs: the eu-west-1 cert (FoundationStack) and the us-east-1 cert (WorkloadCfCertStack). Each cert gets its own unique CNAME — both must be added to Route 53 in shared-services for the environment to be fully live.
 
-This is **one-time per cert** — ACM auto-renews using the same CNAME. It is not needed again unless FoundationStack is destroyed and recreated (which would issue a new cert with a new CNAME).
+This is **one-time per cert** — ACM auto-renews using the same CNAME. It is not needed again unless the stack is destroyed and recreated.
 
 #### How to add the CNAME when deploying a new environment
 
@@ -402,7 +438,9 @@ aws route53 change-resource-record-sets \
 
 Cert validates in ~5–10 minutes. CloudFormation (which waits for the cert to reach ISSUED before continuing) will unblock automatically.
 
-> **Dev cert status:** CNAME for the dev account cert was added manually on 2026-06-25. Cert is ISSUED. No action needed for dev unless FoundationStack is recreated.
+> **Dev cert status (eu-west-1):** CNAME for the dev account FoundationStack cert was added manually on 2026-06-25. Cert is ISSUED. No action needed for dev unless FoundationStack is recreated.
+>
+> **Dev cert status (us-east-1):** WorkloadCfCertStack cert pending deployment. CNAME must be added once HeediqWorkloadCfCertStack is first deployed to the dev account — follow Step 3b in [Setting up a new environment from scratch](#setting-up-a-new-environment-from-scratch).
 
 ### Cross-account Route 53 DNS manager role (D-064)
 
@@ -551,26 +589,76 @@ aws route53 change-resource-record-sets \
 
 The cert validates in ~5–10 minutes. CDK's CloudFormation wait will unblock automatically. This CNAME is permanent and idempotent — the `UPSERT` action is safe to run again.
 
-> **Why this is manual:** ACM issues a unique validation CNAME per cert request. Two certs for `*.heediq.com` (one in dev, one in staging) get different CNAMEs. Since Route 53 is in the shared-services account, the workload CDK deploy can't add records there directly — the Route53AliasRecord custom resource handles regular A-alias records via cross-account role assumption, but cert CNAME addition has not been automated. It's a one-time step per new environment. If FoundationStack is ever destroyed and recreated, a new cert with a new CNAME is issued — repeat this step.
+> **Why this is manual:** ACM issues a unique validation CNAME per cert request. Two certs for `*.heediq.com` (one in dev, one in staging) get different CNAMEs. Since Route 53 is in the shared-services account, the workload CDK deploy can't add records there directly — the Route53AliasRecord custom resource handles regular A-alias records via cross-account role assumption, but cert CNAME addition has not been automated. It is a one-time step per new environment. If FoundationStack is ever destroyed and recreated, a new cert with a new CNAME is issued — repeat this step.
+
+### Step 3b — Deploy WorkloadCfCertStack and add its CNAME ⚠️ (manual, one-time)
+
+After FoundationStack is ISSUED, deploy the CloudFront cert stack (us-east-1):
+
+```bash
+pnpm run cdk deploy HeediqWorkloadCfCertStack -c env=staging --profile heediq-staging
+```
+
+This creates a second ACM cert for `*.heediq.com` in **us-east-1**. It also enters `PENDING_VALIDATION` and needs its own unique CNAME — different from the eu-west-1 CNAME added above.
+
+**Get the cert ARN:**
+```bash
+aws cloudformation describe-stacks \
+  --stack-name HeediqWorkloadCfCertStack \
+  --region us-east-1 \
+  --profile heediq-staging \
+  --query "Stacks[0].Outputs[?OutputKey=='CloudFrontCertArn'].OutputValue" \
+  --output text
+```
+
+**Get its validation CNAME:**
+```bash
+aws acm describe-certificate \
+  --certificate-arn <CloudFrontCertArn from above> \
+  --region us-east-1 \
+  --profile heediq-staging \
+  --query "Certificate.DomainValidationOptions[0].ResourceRecord"
+```
+
+**Add the CNAME to Route 53 in shared-services** (same zone, same pattern as Step 3):
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z0875312RP7WHSNW7AUM \
+  --profile heediq-shared \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "_<hex-us-east-1>.heediq.com.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_<hex-us-east-1>.acm-validations.aws."}]
+      }
+    }]
+  }'
+```
+
+Wait ~5–10 minutes for this cert to become ISSUED before proceeding.
 
 ### Step 4 — Deploy remaining stacks
 
-Once FoundationStack completes (cert ISSUED), deploy all service stacks:
+Once both certs are ISSUED, deploy all service stacks:
 
 ```bash
 pnpm run cdk deploy --all -c env=staging --profile heediq-staging \
   --require-approval never
 ```
 
-This deploys in dependency order: `HeediqTranscriptionStack`, `HeediqWebSocketStack`, `HeediqApiStack`, `HeediqSummarizationStack`. Each stack that has a custom domain (`WebSocketStack`, `ApiStack`) will invoke the `Route53AliasRecord` custom resource Lambda, which assumes `heediq-route53-dns-manager` in shared-services and creates the A-alias record automatically. **No manual DNS step needed for these.**
+This deploys in dependency order. Each stack with a custom domain (`WebSocketStack`, `ApiStack`, `WebStack`) will invoke the `Route53AliasRecord` custom resource Lambda, which assumes `heediq-route53-dns-manager` in shared-services and creates the A-alias record automatically. **No manual DNS step needed for these.**
 
 Verify DNS records were created:
 ```bash
 dig ws-staging.heediq.com A +short
 dig api-staging.heediq.com A +short
+dig staging.heediq.com A +short   # CloudFront A-alias (or dev.heediq.com / heediq.com for other envs)
 ```
 
-Both should resolve to the API Gateway regional domain CNAME (or IP if Route 53 alias resolves directly).
+All should resolve within a few minutes. The CloudFront domain may take longer to propagate globally.
 
 ### Step 5 — Set real secrets
 
@@ -604,23 +692,21 @@ aws secretsmanager put-secret-value --secret-id /heediq/summarization/claude-api
 aws ssm get-parameters-by-path --path /heediq --recursive \
   --query "Parameters[].{Name:Name}" --profile heediq-staging
 
-# Expected count: ~18 params (foundation: 14, api: 2, websocket: 2, summarization: 3)
+# Expected count: ~22 params (foundation: 14, api: 2, websocket: 2, summarization: 3, web: 2)
+# Plus /heediq/infra/cert-arn-us-east-1 in us-east-1 (separate region — check separately)
 
-# Confirm cert is ISSUED
+# Confirm both certs are ISSUED
 aws acm list-certificates --profile heediq-staging \
-  --query "CertificateSummaryList[?DomainName=='*.heediq.com']"
+  --query "CertificateSummaryList[?DomainName=='*.heediq.com']"          # eu-west-1
+
+aws acm list-certificates --profile heediq-staging --region us-east-1 \
+  --query "CertificateSummaryList[?DomainName=='*.heediq.com']"          # us-east-1
 
 # Confirm Route 53 A-alias records exist
 dig ws-staging.heediq.com A +short
 dig api-staging.heediq.com A +short
+dig staging.heediq.com A +short
 ```
-
-### CloudFront custom domain (not yet implemented)
-
-`HeediqWebStack` + `HeediqWorkloadCfCertStack` (us-east-1 cert) are not yet built. When they are, the setup will add:
-- A `HeediqWorkloadCfCertStack` cross-region stack in us-east-1 with another `*.heediq.com` ACM cert (requires a third CNAME for that cert — same manual process as Step 3)
-- A CloudFront distribution in `HeediqWebStack` using the us-east-1 cert
-- A Route 53 alias record for `staging.heediq.com` / `prod.heediq.com` / `dev.heediq.com` → CloudFront
 
 ---
 
