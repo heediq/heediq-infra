@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -205,7 +206,7 @@ export class FoundationStack extends cdk.Stack {
       new s3n.SqsDestination(this.transcriptionQueue),
     );
 
-    // ── S3 — web assets (CloudFront origin; WebStack adds OAC) ───────────────
+    // ── S3 — web assets (CloudFront origin; WebStack OAC) ───────────────────
 
     this.webAssetsBucket = new s3.Bucket(this, 'WebAssetsBucket', {
       bucketName: `heediq-web-assets-${cdk.Aws.ACCOUNT_ID}`,
@@ -215,6 +216,20 @@ export class FoundationStack extends cdk.Stack {
       removalPolicy,
       autoDeleteObjects: !isProd,
     });
+
+    // Grant CloudFront OAC read access. Source-account condition avoids a circular CDK
+    // dependency: WebStack can't add bucket policy from outside this stack without
+    // exporting the distribution ARN back here (Foundation → WebStack ← Foundation).
+    // One distribution per workload account makes the source-account scope acceptable.
+    this.webAssetsBucket.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowCloudFrontOAC',
+      actions: ['s3:GetObject'],
+      principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+      resources: [this.webAssetsBucket.arnForObjects('*')],
+      conditions: {
+        StringEquals: { 'AWS:SourceAccount': this.account },
+      },
+    }));
 
     // ── Cognito User Pool (D-020) ─────────────────────────────────────────────
 
