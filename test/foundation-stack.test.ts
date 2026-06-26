@@ -212,6 +212,25 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
+  // ── S3 bucket policies ────────────────────────────────────────────────────
+
+  it('web-assets bucket policy allows cloudfront.amazonaws.com with source-account condition (OAC)', () => {
+    template.hasResourceProperties('AWS::S3::BucketPolicy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'AllowCloudFrontOAC',
+            Action: 's3:GetObject',
+            Principal: Match.objectLike({ Service: 'cloudfront.amazonaws.com' }),
+            Condition: Match.objectLike({
+              StringEquals: Match.objectLike({ 'AWS:SourceAccount': Match.anyValue() }),
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+
   // ── SSM params ─────────────────────────────────────────────────────────────
 
   it('exports all 14 required SSM parameters', () => {

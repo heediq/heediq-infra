@@ -5,6 +5,7 @@ import { SharedServicesStack } from '../lib/shared-services/shared-services-stac
 import { SharedServicesCfCertStack } from '../lib/shared-services/shared-services-cf-cert-stack';
 import { FoundationStack } from '../lib/foundation/foundation-stack';
 import { ApiStack } from '../lib/api/api-stack';
+import { WorkloadCfCertStack } from '../lib/web/workload-cf-cert-stack';
 import { WebStack } from '../lib/web/web-stack';
 import { TranscriptionStack } from '../lib/transcription/transcription-stack';
 import { SummarizationStack } from '../lib/summarization/summarization-stack';
@@ -48,6 +49,15 @@ if (targetEnv === 'shared') {
     terminationProtection,
   });
 
+  // ACM cert for CloudFront — must be in us-east-1 (D-053).
+  // crossRegionReferences: true enables CDK's SSM-backed cross-region parameter exchange
+  // so the cert ARN flows from this us-east-1 stack to the eu-west-1 WebStack as a prop.
+  const workloadCfCertStack = new WorkloadCfCertStack(app, 'HeediqWorkloadCfCertStack', {
+    env: { account: ACCOUNTS[workloadEnv], region: CERT_REGION },
+    terminationProtection,
+    crossRegionReferences: true,
+  });
+
   new TranscriptionStack(app, 'HeediqTranscriptionStack', {
     env,
     workloadEnv,
@@ -80,6 +90,8 @@ if (targetEnv === 'shared') {
     env,
     workloadEnv,
     terminationProtection,
+    crossRegionReferences: true, // receives cfCert prop from us-east-1 WorkloadCfCertStack
     foundation,
+    cfCert: workloadCfCertStack.cfCert,
   });
 }
