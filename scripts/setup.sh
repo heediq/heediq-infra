@@ -206,17 +206,26 @@ bootstrap_account "$SHARED_PROFILE" "$SHARED_ACCOUNT" "eu-west-1" "shared"
 echo "1b  shared-services us-east-1 (${SHARED_ACCOUNT}) — CloudFront cert region"
 bootstrap_account "$SHARED_PROFILE" "$SHARED_ACCOUNT" "us-east-1" "shared"
 
-echo "1c  dev (${DEV_ACCOUNT})"
+echo "1c  dev eu-west-1 (${DEV_ACCOUNT})"
 verify_auth "$DEV_PROFILE" "$DEV_ACCOUNT"
 bootstrap_account "$DEV_PROFILE" "$DEV_ACCOUNT" "eu-west-1" "dev"
 
-echo "1d  staging (${STAGING_ACCOUNT})"
+echo "1d  dev us-east-1 (${DEV_ACCOUNT}) — WorkloadCfCertStack (CloudFront cert region)"
+bootstrap_account "$DEV_PROFILE" "$DEV_ACCOUNT" "us-east-1" "dev"
+
+echo "1e  staging eu-west-1 (${STAGING_ACCOUNT})"
 verify_auth "$STAGING_PROFILE" "$STAGING_ACCOUNT"
 bootstrap_account "$STAGING_PROFILE" "$STAGING_ACCOUNT" "eu-west-1" "staging"
 
-echo "1e  prod (${PROD_ACCOUNT})"
+echo "1f  staging us-east-1 (${STAGING_ACCOUNT}) — WorkloadCfCertStack (CloudFront cert region)"
+bootstrap_account "$STAGING_PROFILE" "$STAGING_ACCOUNT" "us-east-1" "staging"
+
+echo "1g  prod eu-west-1 (${PROD_ACCOUNT})"
 verify_auth "$PROD_PROFILE" "$PROD_ACCOUNT"
 bootstrap_account "$PROD_PROFILE" "$PROD_ACCOUNT" "eu-west-1" "prod"
+
+echo "1h  prod us-east-1 (${PROD_ACCOUNT}) — WorkloadCfCertStack (CloudFront cert region)"
+bootstrap_account "$PROD_PROFILE" "$PROD_ACCOUNT" "us-east-1" "prod"
 
 echo ""
 echo "--- 2. OIDC Providers + IAM Roles ---"
