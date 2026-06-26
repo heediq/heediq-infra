@@ -34,8 +34,8 @@ export const SHARED_SERVICES = {
   hostedZoneId: 'Z0875312RP7WHSNW7AUM',
   // Cert ARNs are NOT stored here — certs live in each workload account (FoundationStack)
   // so API Gateway and CloudFront can reference them same-account (D-053).
-  // eu-west-1 wildcard cert: FoundationStack.wildcardCert (passed as CDK prop)
-  // us-east-1 wildcard cert: WorkloadCfCertStack (to be created when WebStack needs it)
+  // eu-west-1 wildcard cert: FoundationStack.wildcardCert (passed as CDK prop, D-063)
+  // us-east-1 wildcard cert: WorkloadCfCertStack → WebStack via crossRegionReferences (D-053)
 } as const;
 
 // Email — Zoho EU. DKIM key: Zoho Admin Console → Email → Email Authentication → DKIM.
