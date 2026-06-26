@@ -428,6 +428,8 @@ new WebStack(app, 'HeediqWebStack', {
 
 ACM cannot auto-create DNS records in Route 53 when Route 53 is in a different account (shared-services) than the cert (workload account). CDK's `CertificateValidation.fromDns()` is called **without** a hosted zone argument — this generates the CNAME record details but does not create the Route 53 record. You create it manually once; ACM auto-renews using the same CNAME indefinitely.
 
+> **Observed behaviour (dev, 2026-06-26):** ACM validated the `WorkloadCfCertStack` us-east-1 cert automatically without a manual CNAME step. This happens when a validation CNAME for the same domain already exists in Route 53 — ACM reuses existing records. If the eu-west-1 cert's CNAME is already present and covers `*.heediq.com`, a second cert for the same domain in a different region may validate against it. For new environments where no prior CNAME exists, the manual step is still required.
+
 #### Two certs = two CNAMEs per environment
 
 Each cert request generates a **unique CNAME** — two certs for `*.heediq.com` in different accounts get different CNAMEs. Each environment needs two CNAMEs added to Route 53:
@@ -528,7 +530,7 @@ CloudFormation waits automatically — once ISSUED the CDK deploy continues.
 | Account | Cert region | Status |
 |---|---|---|
 | dev | eu-west-1 (FoundationStack) | **ISSUED** — CNAME added 2026-06-25 |
-| dev | us-east-1 (WorkloadCfCertStack) | **Pending first deploy** — CNAME must be added after `HeediqWorkloadCfCertStack` deploys |
+| dev | us-east-1 (WorkloadCfCertStack) | **ISSUED** — validated automatically on first deploy (2026-06-26); existing `*.heediq.com` CNAME in Route 53 reused |
 | staging | eu-west-1 | **Not deployed** |
 | staging | us-east-1 | **Not deployed** |
 | prod | eu-west-1 | **Not deployed** |
@@ -565,7 +567,7 @@ This role is used for:
 |---|---|
 | `ws-dev.heediq.com` → WebSocket API GW | **Created** — Route53AliasRecord ran on WebSocketStack deploy |
 | `api-dev.heediq.com` → HTTP API GW | **Created** — Route53AliasRecord ran on ApiStack deploy |
-| `dev.heediq.com` → CloudFront | **Pending** — WebStack implemented (PR #25); deploys automatically once WorkloadCfCertStack cert is ISSUED |
+| `dev.heediq.com` → CloudFront | **Created** — Route53AliasRecord ran on WebStack deploy (2026-06-26). Accessible. |
 
 ### DNS record status (staging / prod)
 
