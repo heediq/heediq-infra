@@ -68,14 +68,22 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  it('free-tier task def has family heediq-transcription-free, 1 vCPU / 2 GB / 1 GPU, and the :free image tag', () => {
+  it('free-tier task def has family heediq-transcription-free, 1 vCPU / 2 GB / 1 GPU, and an image tag resolved from the free-image-tag SSM parameter', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       Family: 'heediq-transcription-free',
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
           Cpu: 1024,
           Memory: 2048,
-          Image: Match.stringLikeRegexp('heediq-worker-transcription:free$'),
+          Image: {
+            'Fn::Join': [
+              '',
+              [
+                Match.stringLikeRegexp('heediq-worker-transcription:$'),
+                Match.objectLike({ Ref: Match.stringLikeRegexp('^FreeImageTagParam') }),
+              ],
+            ],
+          },
           ResourceRequirements: Match.arrayWith([
             Match.objectLike({ Type: 'GPU', Value: '1' }),
           ]),
@@ -84,14 +92,22 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  it('paid-tier task def has family heediq-transcription-paid, 4 vCPU / 8 GB / 1 GPU, and the :paid image tag', () => {
+  it('paid-tier task def has family heediq-transcription-paid, 4 vCPU / 8 GB / 1 GPU, and an image tag resolved from the paid-image-tag SSM parameter', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       Family: 'heediq-transcription-paid',
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
           Cpu: 4096,
           Memory: 8192,
-          Image: Match.stringLikeRegexp('heediq-worker-transcription:paid$'),
+          Image: {
+            'Fn::Join': [
+              '',
+              [
+                Match.stringLikeRegexp('heediq-worker-transcription:$'),
+                Match.objectLike({ Ref: Match.stringLikeRegexp('^PaidImageTagParam') }),
+              ],
+            ],
+          },
           ResourceRequirements: Match.arrayWith([
             Match.objectLike({ Type: 'GPU', Value: '1' }),
           ]),

@@ -5,6 +5,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as pipes from 'aws-cdk-lib/aws-pipes';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { WorkloadEnv, COMPUTE, ACCOUNTS, AWS_REGION } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
@@ -140,6 +141,24 @@ export class TranscriptionStack extends cdk.Stack {
     // when promoting a new image (describe → patch image → register → update the Pipe target).
     const ecrRepoUri = `${ACCOUNTS.sharedServices}.dkr.ecr.${AWS_REGION}.amazonaws.com/heediq-worker-transcription`;
 
+    // Per-environment, per-tier image tag — externally owned by CI (deploy.yml), NOT by CDK.
+    // Resolved via a CloudFormation dynamic reference (`{{resolve:ssm:...}}`) at deploy time, so
+    // synth still works without AWS credentials (D-043) — same pattern as the GPU AMI lookup below.
+    // CI seeds each parameter once per environment (initial value 'free'/'paid' matching the
+    // mutable bootstrap tag) and overwrites it with an immutable `sha-<7chars>` tag on every
+    // promotion (D-047). Because CDK only *reads* this parameter, an unrelated `cdk deploy` can
+    // never roll a promoted image back to the bootstrap tag.
+    const freeImageTagParam = ssm.StringParameter.fromStringParameterName(
+      this,
+      'FreeImageTagParam',
+      '/heediq/transcription/free-image-tag',
+    );
+    const paidImageTagParam = ssm.StringParameter.fromStringParameterName(
+      this,
+      'PaidImageTagParam',
+      '/heediq/transcription/paid-image-tag',
+    );
+
     // Config injected as env vars at launch — no SSM in hot path (D-038)
     const baseEnv: Record<string, string> = {
       AWS_DEFAULT_REGION: AWS_REGION,
@@ -160,7 +179,7 @@ export class TranscriptionStack extends cdk.Stack {
     });
     freeTierTaskDef.addContainer('Worker', {
       containerName: 'heediq-transcription-worker',
-      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:free`),
+      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:${freeImageTagParam.stringValue}`),
       environment: baseEnv,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'free', logGroup }),
       gpuCount: 1,
@@ -177,7 +196,7 @@ export class TranscriptionStack extends cdk.Stack {
     });
     paidTierTaskDef.addContainer('Worker', {
       containerName: 'heediq-transcription-worker',
-      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:paid`),
+      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:${paidImageTagParam.stringValue}`),
       environment: baseEnv,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'paid', logGroup }),
       gpuCount: 1,
