@@ -121,12 +121,24 @@ export class TranscriptionStack extends cdk.Stack {
       }),
     );
 
+    // SQS — re-enqueue to the transcription queue on Spot interruption (D-066). EventBridge
+    // Pipes (not the worker) consumes heediq-transcription and deletes the message as soon as
+    // it hands the job to RunTask, so the worker must explicitly re-send on SIGTERM instead of
+    // relying on visibility-timeout expiry.
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'],
+        resources: [foundation.transcriptionQueue.queueArn],
+      }),
+    );
+
     // ── Task definitions (D-059, D-060, D-062) ────────────────────────────────
     // EC2 task definitions with gpuCount=1 per container. ECS GPU resource tracking ensures
     // at most one task runs per g4dn.xlarge instance (1 GPU per instance).
-    // Same ECR image for both tiers; TIER env var tells the worker which model to load (D-060).
-    // Models are baked into the image at build time — no runtime download (D-062).
-    const ecrImageUri = `${ACCOUNTS.sharedServices}.dkr.ecr.${AWS_REGION}.amazonaws.com/heediq-worker-transcription`;
+    // Two separate images, one per tier — each has only its tier's model baked in at build
+    // time (D-062). `family` is explicit so CI can target task-definition revisions by name
+    // when promoting a new image (describe → patch image → register → update the Pipe target).
+    const ecrRepoUri = `${ACCOUNTS.sharedServices}.dkr.ecr.${AWS_REGION}.amazonaws.com/heediq-worker-transcription`;
 
     // Config injected as env vars at launch — no SSM in hot path (D-038)
     const baseEnv: Record<string, string> = {
@@ -134,20 +146,22 @@ export class TranscriptionStack extends cdk.Stack {
       JOBS_TABLE_NAME: foundation.jobsTable.tableName,
       RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
       AUDIO_BUCKET_NAME: foundation.audioUploadsBucket.bucketName,
+      TRANSCRIPTION_QUEUE_URL: foundation.transcriptionQueue.queueUrl,
       // Summarization queue URL — enqueue after transcription completes (D-065)
       SUMMARIZATION_QUEUE_URL: `https://sqs.${AWS_REGION}.amazonaws.com/${ACCOUNTS[props.workloadEnv]}/heediq-summarization`,
     };
 
     // Free tier: whisper small — 1 vCPU / 2 GB / 1 GPU (D-059, D-062)
     const freeTierTaskDef = new ecs.Ec2TaskDefinition(this, 'FreeTierTaskDef', {
+      family: 'heediq-transcription-free',
       networkMode: ecs.NetworkMode.BRIDGE,
       executionRole,
       taskRole,
     });
     freeTierTaskDef.addContainer('Worker', {
       containerName: 'heediq-transcription-worker',
-      image: ecs.ContainerImage.fromRegistry(ecrImageUri),
-      environment: { ...baseEnv, TIER: 'free' },
+      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:free`),
+      environment: baseEnv,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'free', logGroup }),
       gpuCount: 1,
       cpu: COMPUTE.gpu.free.cpu,
@@ -156,14 +170,15 @@ export class TranscriptionStack extends cdk.Stack {
 
     // Paid tier: whisper large-v3 + pyannote diarization — 4 vCPU / 8 GB / 1 GPU (D-059, D-062)
     const paidTierTaskDef = new ecs.Ec2TaskDefinition(this, 'PaidTierTaskDef', {
+      family: 'heediq-transcription-paid',
       networkMode: ecs.NetworkMode.BRIDGE,
       executionRole,
       taskRole,
     });
     paidTierTaskDef.addContainer('Worker', {
       containerName: 'heediq-transcription-worker',
-      image: ecs.ContainerImage.fromRegistry(ecrImageUri),
-      environment: { ...baseEnv, TIER: 'paid' },
+      image: ecs.ContainerImage.fromRegistry(`${ecrRepoUri}:paid`),
+      environment: baseEnv,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'paid', logGroup }),
       gpuCount: 1,
       cpu: COMPUTE.gpu.paid.cpu,
@@ -284,11 +299,22 @@ export class TranscriptionStack extends cdk.Stack {
         },
         target: cluster.clusterArn,
         targetParameters: {
+          // Job data reaches the container only through this override — the worker has no SQS
+          // client of its own (one RunTask = one job, D-066). `<$.body>` is a Pipes dynamic path
+          // reference to the raw SQS message body of the event that triggered this RunTask.
           ecsTaskParameters: {
             taskDefinitionArn: taskDef.taskDefinitionArn,
             capacityProviderStrategy: [
               { capacityProvider: capacityProvider.capacityProviderName, weight: 1 },
             ],
+            overrides: {
+              containerOverrides: [
+                {
+                  name: 'heediq-transcription-worker',
+                  environment: [{ name: 'SQS_MESSAGE_BODY', value: '<$.body>' }],
+                },
+              ],
+            },
           },
         },
       });
