@@ -100,7 +100,7 @@ ensure_deploy_role() {
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "${OIDC_HOST}:aud": "sts.amazonaws.com" },
-      "StringLike":   { "${OIDC_HOST}:sub": "repo:${GITHUB_ORG}/${INFRA_REPO}:*" }
+      "StringLike":   { "${OIDC_HOST}:sub": "repo:${GITHUB_ORG}/*:*" }
     }
   }]
 }
