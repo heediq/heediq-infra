@@ -87,6 +87,16 @@ ensure_oidc_provider() {
   fi
 }
 
+seed_ssm_param() {
+  local profile=$1 name=$2 value=$3
+  if aws ssm get-parameter --name "$name" --profile "$profile" &>/dev/null; then
+    echo "  [skip] $name already exists (CI-managed — not overwritten)"
+  else
+    aws ssm put-parameter --name "$name" --value "$value" --type String --profile "$profile" >/dev/null
+    echo "  [ok]   $name seeded with placeholder '$value'"
+  fi
+}
+
 ensure_deploy_role() {
   local profile=$1 account_id=$2
   local role="GitHubActionsDeployRole"
@@ -250,6 +260,25 @@ echo ""
 echo "2d  prod"
 ensure_oidc_provider "$PROD_PROFILE" "$PROD_ACCOUNT"
 ensure_deploy_role   "$PROD_PROFILE" "$PROD_ACCOUNT"
+
+echo ""
+echo "--- 3. SSM Bootstrap Parameters ---"
+echo "(Skipped if already set — CI-promoted values are never overwritten.)"
+echo ""
+
+echo "3a  dev — TranscriptionStack image-tag placeholders"
+seed_ssm_param "$DEV_PROFILE" "/heediq/transcription/free-image-tag" "free"
+seed_ssm_param "$DEV_PROFILE" "/heediq/transcription/paid-image-tag" "paid"
+
+echo ""
+echo "3b  staging — TranscriptionStack image-tag placeholders"
+seed_ssm_param "$STAGING_PROFILE" "/heediq/transcription/free-image-tag" "free"
+seed_ssm_param "$STAGING_PROFILE" "/heediq/transcription/paid-image-tag" "paid"
+
+echo ""
+echo "3c  prod — TranscriptionStack image-tag placeholders"
+seed_ssm_param "$PROD_PROFILE" "/heediq/transcription/free-image-tag" "free"
+seed_ssm_param "$PROD_PROFILE" "/heediq/transcription/paid-image-tag" "paid"
 
 echo ""
 echo "=== Done. ==="

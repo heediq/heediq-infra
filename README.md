@@ -209,18 +209,18 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | Auto Scaling Group | `heediq-transcription-asg` — min=0, max=N; managed by ECS capacity provider |
 | Launch Template | ECS-optimized GPU AMI (CUDA + nvidia-container-toolkit + ECS agent pre-configured); user-data registers instance with ECS cluster |
 | ECS capacity provider | `heediq-transcription-ec2` — managed scaling + managed termination protection |
-| Task def — whisper small | `Ec2TaskDefinition`, `TIER=free` env var, 1 GPU unit resource requirement |
-| Task def — whisper large-v3 | `Ec2TaskDefinition`, `TIER=paid` env var, 1 GPU unit resource requirement |
-| EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; EC2 capacity provider (D-059) |
+| Task def — free | family `heediq-transcription-free` — whisper small image (`:free-sha-<7chars>` from SSM `/heediq/transcription/free-image-tag`); 1 GPU / 1 vCPU / 2 GB (D-062) |
+| Task def — paid | family `heediq-transcription-paid` — large-v3 + pyannote image (`:paid-sha-<7chars>` from SSM `/heediq/transcription/paid-image-tag`); 1 GPU / 4 vCPU / 8 GB (D-062) |
+| EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; `SQS_MESSAGE_BODY` container override (`<$.body>`); EC2 capacity provider (D-059, D-066) |
 | IAM execution role | `heediq-transcription-execution` — cross-account ECR pull (shared-services 313828097088) + CloudWatch Logs write |
-| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket) + DynamoDB write (heediq-jobs + heediq-recordings) + `sqs:SendMessage` on `heediq-summarization` (enqueues after job completes, D-065) |
+| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket, no write grant; transcript goes to DynamoDB) + DynamoDB read/write (heediq-jobs + heediq-recordings) + `sqs:SendMessage` on `heediq-summarization` (D-065) + `sqs:SendMessage` on `heediq-transcription` (Spot re-enqueue, D-066) |
 | IAM instance role | `heediq-transcription-instance` — ECS agent registration, CloudWatch Logs, SSM agent access |
 | IAM pipe role | `heediq-transcription-pipe` — SQS consume + `ecs:RunTask` + `iam:PassRole` |
-| ECR image | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription` (cross-account pull) |
+| ECR images | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription:{free\|paid}-sha-<7chars>` — two per-tier images, sha-tagged (D-047, D-062); image tag promoted per-environment by CI via `aws ssm put-parameter` + `ecs register-task-definition` + `aws pipes update-pipe` |
 
-**Message routing (D-059, D-060):** The API enqueues jobs with `messageAttributes.tier = 'free' | 'paid'`. Access to `paid` (large-v3) is enforced at the API enqueue endpoint — free users are rejected if they request it. Each EventBridge Pipe filters on tier and launches the matching task definition. No idle containers — tasks launch on demand, EC2 instance terminates after job completes.
+**Message routing (D-059, D-060, D-062):** The API enqueues jobs with `messageAttributes.tier = 'free' | 'paid'` (required — without this attribute both Pipe filters fail and the job is silently never picked up). Access to `paid` (large-v3) is enforced at the API enqueue endpoint — free users are rejected if they request it. Each EventBridge Pipe filters on tier and launches the matching task definition via `RunTask`. No idle containers — tasks launch on demand, EC2 instance terminates after job completes. No `TIER` env var in task definitions — tier is per-image, not env-based (D-062).
 
-**Spot interruption:** worker catches SIGTERM → writes `status=retrying` to `heediq-jobs` → SQS message re-enqueues on visibility timeout expiry (D-059).
+**Spot interruption (D-066):** Pipes deletes the SQS message the moment it hands the job to `RunTask` — before the worker process starts. There is no visibility-timeout left to expire by the time a Spot SIGTERM arrives. Worker catches SIGTERM → writes `status=retrying` → **explicitly re-enqueues** `TranscriptionJobMessage` to `heediq-transcription` with the `tier` message attribute preserved (required for the Pipe filter to re-route the retried job correctly).
 
 ### WebSocketStack resources (D-061)
 
@@ -255,7 +255,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-recordings` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
 **Message flow (D-065):**
-- Audio path: transcription worker → enqueues `{ sourceType: 'transcript', contentRef: s3://... }` after faster-whisper completes
+- Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: recordingId }` after faster-whisper completes. Transcript is written to `heediq-recordings[recordingId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `recordingId`
 - Direct path: API Lambda → enqueues `{ sourceType: 'text|pdf|email|...', contentRef: s3://... }` for non-audio sources (D-026)
 
 **Cross-stack IAM (no CDK dependency required):** `heediq-summarization` queue ARN is deterministic (`arn:aws:sqs:{region}:{account}:heediq-summarization`) — TranscriptionStack task role and ApiStack Lambda role each receive `sqs:SendMessage` using the constructed ARN. Both also receive `SUMMARIZATION_QUEUE_URL` as an env var.
@@ -362,6 +362,19 @@ aws secretsmanager create-secret \
 ```
 
 Replace `placeholder` with the real Anthropic API key from the Anthropic console (D-032). The Lambda Extension reads this at cold-start; rotating the secret value takes effect on the next cold-start.
+
+### TranscriptionStack — SSM image-tag params prerequisite before first deploy
+
+`TranscriptionStack` uses CloudFormation dynamic SSM references (`{{resolve:ssm:...}}`) for image tags. CloudFormation resolves them at deploy time — if the parameters don't exist the deploy fails immediately. `scripts/setup.sh` seeds these automatically (idempotent — skips if already set so CI-promoted values are never overwritten).
+
+If you need to seed manually:
+
+```bash
+aws ssm put-parameter --name /heediq/transcription/free-image-tag --value free --type String --profile heediq-dev
+aws ssm put-parameter --name /heediq/transcription/paid-image-tag --value paid --type String --profile heediq-dev
+```
+
+The placeholder value doesn't need to be a real image tag — ECS only validates image existence when a task actually launches, not when the task definition is registered. Once `heediq-worker-transcription` CI runs its first promote step, it overwrites these with real `free-sha-<7chars>` / `paid-sha-<7chars>` values and registers updated task definition revisions.
 
 ## Domains, Subdomains & Certificates
 

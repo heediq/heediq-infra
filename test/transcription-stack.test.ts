@@ -68,31 +68,59 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  it('free-tier task def has 1 vCPU / 2 GB / 1 GPU and TIER=free', () => {
+  it('free-tier task def has family heediq-transcription-free, 1 vCPU / 2 GB / 1 GPU, and an image tag resolved from the free-image-tag SSM parameter', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Family: 'heediq-transcription-free',
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
           Cpu: 1024,
           Memory: 2048,
+          Image: {
+            'Fn::Join': [
+              '',
+              [
+                Match.stringLikeRegexp('heediq-worker-transcription:$'),
+                Match.objectLike({ Ref: Match.stringLikeRegexp('^FreeImageTagParam') }),
+              ],
+            ],
+          },
           ResourceRequirements: Match.arrayWith([
             Match.objectLike({ Type: 'GPU', Value: '1' }),
           ]),
-          Environment: Match.arrayWith([{ Name: 'TIER', Value: 'free' }]),
         }),
       ]),
     });
   });
 
-  it('paid-tier task def has 4 vCPU / 8 GB / 1 GPU and TIER=paid', () => {
+  it('paid-tier task def has family heediq-transcription-paid, 4 vCPU / 8 GB / 1 GPU, and an image tag resolved from the paid-image-tag SSM parameter', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Family: 'heediq-transcription-paid',
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
           Cpu: 4096,
           Memory: 8192,
+          Image: {
+            'Fn::Join': [
+              '',
+              [
+                Match.stringLikeRegexp('heediq-worker-transcription:$'),
+                Match.objectLike({ Ref: Match.stringLikeRegexp('^PaidImageTagParam') }),
+              ],
+            ],
+          },
           ResourceRequirements: Match.arrayWith([
             Match.objectLike({ Type: 'GPU', Value: '1' }),
           ]),
-          Environment: Match.arrayWith([{ Name: 'TIER', Value: 'paid' }]),
+        }),
+      ]),
+    });
+  });
+
+  it('neither task def sets a TIER env var — tier routing is per-image (D-062), not env-based', () => {
+    template.allResourcesProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Environment: Match.not(Match.arrayWith([Match.objectLike({ Name: 'TIER' })])),
         }),
       ]),
     });
@@ -288,6 +316,21 @@ describe('TranscriptionStack', () => {
           Match.objectLike({
             Action: 'sqs:SendMessage',
             Resource: Match.stringLikeRegexp('heediq-summarization'),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('task role policy grants sqs:SendMessage on the transcription queue itself — Spot-interruption re-enqueue (D-066)', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'sqs:SendMessage',
+            Resource: Match.objectLike({
+              'Fn::ImportValue': Match.stringLikeRegexp('TranscriptionQueue'),
+            }),
           }),
         ]),
       }),
