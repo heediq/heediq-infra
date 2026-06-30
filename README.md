@@ -363,6 +363,19 @@ aws secretsmanager create-secret \
 
 Replace `placeholder` with the real Anthropic API key from the Anthropic console (D-032). The Lambda Extension reads this at cold-start; rotating the secret value takes effect on the next cold-start.
 
+### TranscriptionStack — SSM image-tag params prerequisite before first deploy
+
+`TranscriptionStack` uses CloudFormation dynamic SSM references (`{{resolve:ssm:...}}`) for image tags. CloudFormation resolves them at deploy time — if the parameters don't exist the deploy fails immediately. `scripts/setup.sh` seeds these automatically (idempotent — skips if already set so CI-promoted values are never overwritten).
+
+If you need to seed manually:
+
+```bash
+aws ssm put-parameter --name /heediq/transcription/free-image-tag --value free --type String --profile heediq-dev
+aws ssm put-parameter --name /heediq/transcription/paid-image-tag --value paid --type String --profile heediq-dev
+```
+
+The placeholder value doesn't need to be a real image tag — ECS only validates image existence when a task actually launches, not when the task definition is registered. Once `heediq-worker-transcription` CI runs its first promote step, it overwrites these with real `free-sha-<7chars>` / `paid-sha-<7chars>` values and registers updated task definition revisions.
+
 ## Domains, Subdomains & Certificates
 
 ### Domain & subdomain structure (D-052)
