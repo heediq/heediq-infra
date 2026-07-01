@@ -50,14 +50,15 @@ describe('SummarizationStack (dev)', () => {
     });
   });
 
-  it('Lambda environment includes JOBS_TABLE, RECORDINGS_TABLE, AUDIO_BUCKET', () => {
+  it('Lambda environment includes JOBS_TABLE_NAME, RECORDINGS_TABLE_NAME, AUDIO_BUCKET_NAME, CLAUDE_SECRET_NAME', () => {
     summarization.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'heediq-summarization',
       Environment: Match.objectLike({
         Variables: Match.objectLike({
-          JOBS_TABLE:       Match.anyValue(),
-          RECORDINGS_TABLE: Match.anyValue(),
-          AUDIO_BUCKET:     Match.anyValue(),
+          JOBS_TABLE_NAME:       Match.anyValue(),
+          RECORDINGS_TABLE_NAME: Match.anyValue(),
+          AUDIO_BUCKET_NAME:     Match.anyValue(),
+          CLAUDE_SECRET_NAME:    Match.anyValue(),
         }),
       }),
     });

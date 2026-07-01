@@ -95,14 +95,15 @@ describe('ApiStack (dev)', () => {
       FunctionName: 'heediq-api',
       Environment: Match.objectLike({
         Variables: Match.objectLike({
-          RECORDINGS_TABLE:        Match.anyValue(),
-          ORGS_TABLE:              Match.anyValue(),
-          USERS_TABLE:             Match.anyValue(),
-          JOBS_TABLE:              Match.anyValue(),
-          AUDIO_BUCKET:            Match.anyValue(),
-          TRANSCRIPTION_QUEUE_URL: Match.anyValue(),
-          COGNITO_USER_POOL_ID:    Match.anyValue(),
-          COGNITO_CLIENT_ID:       Match.anyValue(),
+          RECORDINGS_TABLE_NAME:     Match.anyValue(),
+          ORGS_TABLE_NAME:           Match.anyValue(),
+          USERS_TABLE_NAME:          Match.anyValue(),
+          JOBS_TABLE_NAME:           Match.anyValue(),
+          WS_CONNECTIONS_TABLE_NAME: Match.anyValue(),
+          AUDIO_BUCKET_NAME:         Match.anyValue(),
+          TRANSCRIPTION_QUEUE_URL:   Match.anyValue(),
+          COGNITO_USER_POOL_ID:      Match.anyValue(),
+          COGNITO_CLIENT_ID:         Match.anyValue(),
         }),
       }),
     });

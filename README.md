@@ -254,9 +254,11 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
 | IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-recordings` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
-**Message flow (D-065):**
-- Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: recordingId }` after faster-whisper completes. Transcript is written to `heediq-recordings[recordingId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `recordingId`
-- Direct path: API Lambda → enqueues `{ sourceType: 'text|pdf|email|...', contentRef: s3://... }` for non-audio sources (D-026)
+**Message flow (D-065, D-067):**
+- Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: recordingId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-recordings[recordingId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `recordingId`
+- Direct path: API Lambda → enqueues `{ sourceType: 'text|pdf|email|...', contentRef: s3://..., tier }` for non-audio sources (D-026)
+
+**Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/summarization/anthropic-api-key` — Anthropic API key; fetched by the Lambda at cold start via the Parameters and Secrets Lambda Extension (D-038). Must exist before the first `heediq-worker-summarization` Lambda invocation.
 
 **Cross-stack IAM (no CDK dependency required):** `heediq-summarization` queue ARN is deterministic (`arn:aws:sqs:{region}:{account}:heediq-summarization`) — TranscriptionStack task role and ApiStack Lambda role each receive `sqs:SendMessage` using the constructed ARN. Both also receive `SUMMARIZATION_QUEUE_URL` as an env var.
 
