@@ -56,10 +56,10 @@ export class SummarizationStack extends cdk.Stack {
       memorySize: COMPUTE.lambda.summarization.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.summarization.timeoutSecs),
       environment: {
-        JOBS_TABLE:        foundation.jobsTable.tableName,
-        RECORDINGS_TABLE:  foundation.recordingsTable.tableName,
-        AUDIO_BUCKET:      foundation.audioUploadsBucket.bucketName,
-        CLAUDE_SECRET_NAME: '/heediq/summarization/anthropic-api-key',
+        JOBS_TABLE_NAME:       foundation.jobsTable.tableName,
+        RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
+        AUDIO_BUCKET_NAME:     foundation.audioUploadsBucket.bucketName,
+        CLAUDE_SECRET_NAME:    '/heediq/summarization/anthropic-api-key',
       },
     });
 
