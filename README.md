@@ -256,7 +256,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 
 **Message flow (D-065, D-067):**
 - Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: recordingId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-recordings[recordingId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `recordingId`
-- Direct path: API Lambda → enqueues `{ sourceType: 'text|pdf|email|...', contentRef: s3://..., tier }` for non-audio sources (D-026)
+- Direct path: API Lambda → enqueues `{ sourceType: 'text', contentRef: recordingId, tier }` for direct non-audio uploads (D-026). Note: `SourceType` in `@heediq/shared` currently only supports `'audio' | 'text'`; pdf/email/Excel support is planned but not yet in the schema.
 
 **Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/summarization/anthropic-api-key` — Anthropic API key; fetched by the Lambda at cold start via the Parameters and Secrets Lambda Extension (D-038). Must exist before the first `heediq-worker-summarization` Lambda invocation.
 
@@ -358,7 +358,7 @@ The summarization Lambda IAM role has `secretsmanager:GetSecretValue` on `/heedi
 
 ```bash
 aws secretsmanager create-secret \
-  --name /heediq/summarization/claude-api-key \
+  --name /heediq/summarization/anthropic-api-key \
   --secret-string "placeholder" \
   --profile heediq-dev
 ```
@@ -648,7 +648,7 @@ aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
   --type String --profile heediq-staging
 
 # Summarization Lambda secret (required before Lambda cold-starts)
-aws secretsmanager create-secret --name /heediq/summarization/claude-api-key \
+aws secretsmanager create-secret --name /heediq/summarization/anthropic-api-key \
   --secret-string "placeholder" --profile heediq-staging
 ```
 
@@ -801,7 +801,7 @@ aws secretsmanager put-secret-value --secret-id /heediq/auth/microsoft-client-se
   --secret-string "<real-secret>" --profile heediq-staging
 
 # Anthropic API key (from Anthropic console)
-aws secretsmanager put-secret-value --secret-id /heediq/summarization/claude-api-key \
+aws secretsmanager put-secret-value --secret-id /heediq/summarization/anthropic-api-key \
   --secret-string "<real-key>" --profile heediq-staging
 ```
 
