@@ -182,7 +182,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | SSM path | Value |
 |---|---|
 | `/heediq/infra/cert-arn-eu-west-1` | ACM wildcard cert ARN (eu-west-1) — API Gateway + WebSocket custom domains (D-063) |
-| `/heediq/api/recordings-table-name` | `heediq-recordings` |
+| `/heediq/api/sources-table-name` | `heediq-sources` |
 | `/heediq/api/orgs-table-name` | `heediq-orgs` |
 | `/heediq/api/users-table-name` | `heediq-users` |
 | `/heediq/api/jobs-table-name` | `heediq-jobs` |
@@ -213,7 +213,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | Task def — paid | family `heediq-transcription-paid` — large-v3 + pyannote image (`:paid-sha-<7chars>` from SSM `/heediq/transcription/paid-image-tag`); 1 GPU / 4 vCPU / 8 GB (D-062) |
 | EventBridge Pipes | `heediq-transcription-free` / `heediq-transcription-paid` — filter on SQS `messageAttributes.tier`; batchSize=1; `SQS_MESSAGE_BODY` container override (`<$.body>`); EC2 capacity provider (D-059, D-066) |
 | IAM execution role | `heediq-transcription-execution` — cross-account ECR pull (shared-services 313828097088) + CloudWatch Logs write |
-| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket, no write grant; transcript goes to DynamoDB) + DynamoDB read/write (heediq-jobs + heediq-recordings) + `sqs:SendMessage` on `heediq-summarization` (D-065) + `sqs:SendMessage` on `heediq-transcription` (Spot re-enqueue, D-066) |
+| IAM task role | `heediq-transcription-task` — S3 read (audio uploads bucket, no write grant; transcript goes to DynamoDB) + DynamoDB read/write (heediq-jobs + heediq-sources) + `sqs:SendMessage` on `heediq-summarization` (D-065) + `sqs:SendMessage` on `heediq-transcription` (Spot re-enqueue, D-066) |
 | IAM instance role | `heediq-transcription-instance` — ECS agent registration, CloudWatch Logs, SSM agent access |
 | IAM pipe role | `heediq-transcription-pipe` — SQS consume + `ecs:RunTask` + `iam:PassRole` |
 | ECR images | `313828097088.dkr.ecr.eu-west-1.amazonaws.com/heediq-worker-transcription:{free\|paid}-sha-<7chars>` — two per-tier images, sha-tagged (D-047, D-062); image tag promoted per-environment by CI via `aws ssm put-parameter` + `ecs register-task-definition` + `aws pipes update-pipe` |
@@ -228,7 +228,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 |---|---|
 | WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes, stage `ws`, auto-deploy |
 | Connection Lambda | `heediq-ws-connect` — on `$connect`: validates JWT, stores `connectionId` in `heediq-ws-connections`; on `$disconnect`: removes row. 29s timeout (WebSocket $connect hard limit). |
-| Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-recording`; POSTs status to each active `connectionId` via `execute-api:ManageConnections`. Deletes stale connections on `GoneException`. |
+| Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-source`; POSTs status to each active `connectionId` via `execute-api:ManageConnections`. Deletes stale connections on `GoneException`. |
 | Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
 | IAM: pusher role | `execute-api:ManageConnections` scoped to WebSocket API ARN |
 
@@ -252,11 +252,11 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | SQS queue | `heediq-summarization` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
 | DLQ | `heediq-summarization-dlq` — 14-day retention; receives after 3 failed attempts |
 | Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
-| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-recordings` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
+| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-sources` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
 **Message flow (D-065, D-067):**
-- Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: recordingId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-recordings[recordingId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `recordingId`
-- Direct path: API Lambda → enqueues `{ sourceType: 'text', contentRef: recordingId, tier }` for direct non-audio uploads (D-026). Note: `SourceType` in `@heediq/shared` currently only supports `'audio' | 'text'`; pdf/email/Excel support is planned but not yet in the schema.
+- Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: sourceId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-sources[sourceId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `sourceId`
+- Direct path: API Lambda → enqueues `{ sourceType: 'text', contentRef: sourceId, tier }` for direct non-audio uploads (D-026). Note: `SourceType` in `@heediq/shared` currently only supports `'audio' | 'text'`; pdf/email/Excel support is planned but not yet in the schema.
 
 **Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/summarization/anthropic-api-key` — Anthropic API key; fetched by the Lambda at cold start via the Parameters and Secrets Lambda Extension (D-038). Must exist before the first `heediq-worker-summarization` Lambda invocation.
 
@@ -277,7 +277,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: Lambda role | DynamoDB read/write: recordings, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
 
 **SSM params (ApiStack):**
 
@@ -323,11 +323,11 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 
 | Table | PK | SK | GSIs | Streams |
 |---|---|---|---|---|
-| `heediq-recordings` | `orgId` | `recordingId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | — |
+| `heediq-sources` | `orgId` | `sourceId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | — |
 | `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) | — |
 | `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId) | — |
-| `heediq-jobs` | `recordingId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
-| `heediq-ws-connections` | `connectionId` | — | `by-recording` (PK=`recordingId`), TTL on `expiresAt` | — |
+| `heediq-jobs` | `sourceId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
+| `heediq-ws-connections` | `connectionId` | — | `by-source` (PK=`sourceId`), TTL on `expiresAt` | — |
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
 

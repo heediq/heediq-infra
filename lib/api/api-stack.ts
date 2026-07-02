@@ -33,7 +33,7 @@ export class ApiStack extends cdk.Stack {
       memorySize: COMPUTE.lambda.api.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.api.timeoutSecs),
       environment: {
-        RECORDINGS_TABLE_NAME:     props.foundation.recordingsTable.tableName,
+        SOURCES_TABLE_NAME:        props.foundation.sourcesTable.tableName,
         ORGS_TABLE_NAME:           props.foundation.orgsTable.tableName,
         USERS_TABLE_NAME:          props.foundation.usersTable.tableName,
         JOBS_TABLE_NAME:           props.foundation.jobsTable.tableName,
@@ -49,7 +49,7 @@ export class ApiStack extends cdk.Stack {
 
     // ── IAM grants — least privilege (D-034) ─────────────────────────────────
     // DynamoDB — all five tables the API reads/writes
-    props.foundation.recordingsTable.grantReadWriteData(apiFn);
+    props.foundation.sourcesTable.grantReadWriteData(apiFn);
     props.foundation.orgsTable.grantReadWriteData(apiFn);
     props.foundation.usersTable.grantReadWriteData(apiFn);
     props.foundation.jobsTable.grantReadWriteData(apiFn);

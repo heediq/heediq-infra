@@ -59,7 +59,7 @@ export class WebSocketStack extends cdk.Stack {
       },
     });
 
-    // Query by-recording GSI; delete stale connections on GoneException (D-061)
+    // Query by-source GSI; delete stale connections on GoneException (D-061)
     props.foundation.wsConnectionsTable.grantReadWriteData(pusherFn);
 
     // DDB Streams trigger — every MODIFY event on heediq-jobs fans out to connected clients

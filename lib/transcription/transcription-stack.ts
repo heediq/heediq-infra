@@ -109,7 +109,7 @@ export class TranscriptionStack extends cdk.Stack {
 
     foundation.audioUploadsBucket.grantRead(taskRole);
     foundation.jobsTable.grantWriteData(taskRole);
-    foundation.recordingsTable.grantWriteData(taskRole);
+    foundation.sourcesTable.grantWriteData(taskRole);
 
     // SQS — enqueue to summarization queue when transcription completes (D-065)
     // ARN constructed from known constants — no CDK cross-stack dependency needed.
@@ -163,7 +163,7 @@ export class TranscriptionStack extends cdk.Stack {
     const baseEnv: Record<string, string> = {
       AWS_DEFAULT_REGION: AWS_REGION,
       JOBS_TABLE_NAME: foundation.jobsTable.tableName,
-      RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
+      SOURCES_TABLE_NAME: foundation.sourcesTable.tableName,
       AUDIO_BUCKET_NAME: foundation.audioUploadsBucket.bucketName,
       TRANSCRIPTION_QUEUE_URL: foundation.transcriptionQueue.queueUrl,
       // Summarization queue URL — enqueue after transcription completes (D-065)

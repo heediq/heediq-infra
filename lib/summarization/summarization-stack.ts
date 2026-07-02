@@ -25,7 +25,7 @@ export class SummarizationStack extends cdk.Stack {
     // ── SQS — source-agnostic summarization queue (D-065) ────────────────────
     // Single entry point for ALL content sources: transcription worker (audio)
     // and API Lambda (text files, PDFs, emails, Excel, etc. — D-026).
-    // Message payload: { sourceType, contentRef (S3 path), recordingId, orgId, ... }
+    // Message payload: { sourceType, contentRef (S3 path), sourceId, orgId, ... }
 
     const dlq = new sqs.Queue(this, 'SummarizationDlq', {
       queueName: 'heediq-summarization-dlq',
@@ -57,7 +57,7 @@ export class SummarizationStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(COMPUTE.lambda.summarization.timeoutSecs),
       environment: {
         JOBS_TABLE_NAME:       foundation.jobsTable.tableName,
-        RECORDINGS_TABLE_NAME: foundation.recordingsTable.tableName,
+        SOURCES_TABLE_NAME: foundation.sourcesTable.tableName,
         AUDIO_BUCKET_NAME:     foundation.audioUploadsBucket.bucketName,
         CLAUDE_SECRET_NAME:    '/heediq/summarization/anthropic-api-key',
       },
@@ -82,7 +82,7 @@ export class SummarizationStack extends cdk.Stack {
     foundation.jobsTable.grantReadWriteData(summarizationFn);
 
     // DynamoDB — write structured extraction output (requirements, decisions, etc.)
-    foundation.recordingsTable.grantReadWriteData(summarizationFn);
+    foundation.sourcesTable.grantReadWriteData(summarizationFn);
 
     // S3 — read transcript/content files written by transcription worker or uploaded
     // directly (text files, PDFs, emails, Excel — D-065, D-026)

@@ -50,13 +50,13 @@ describe('SummarizationStack (dev)', () => {
     });
   });
 
-  it('Lambda environment includes JOBS_TABLE_NAME, RECORDINGS_TABLE_NAME, AUDIO_BUCKET_NAME, CLAUDE_SECRET_NAME', () => {
+  it('Lambda environment includes JOBS_TABLE_NAME, SOURCES_TABLE_NAME, AUDIO_BUCKET_NAME, CLAUDE_SECRET_NAME', () => {
     summarization.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'heediq-summarization',
       Environment: Match.objectLike({
         Variables: Match.objectLike({
           JOBS_TABLE_NAME:       Match.anyValue(),
-          RECORDINGS_TABLE_NAME: Match.anyValue(),
+          SOURCES_TABLE_NAME: Match.anyValue(),
           AUDIO_BUCKET_NAME:     Match.anyValue(),
           CLAUDE_SECRET_NAME:    Match.anyValue(),
         }),
@@ -149,7 +149,7 @@ describe('SummarizationStack (dev)', () => {
     });
   });
 
-  it('Lambda role has DynamoDB read+write grants (jobs + recordings tables)', () => {
+  it('Lambda role has DynamoDB read+write grants (jobs + sources tables)', () => {
     // Cross-stack resources appear as Fn::ImportValue arrays in Resource — assert actions only.
     // The CDK construct wiring guarantees the correct table ARNs are attached.
     summarization.hasResourceProperties('AWS::IAM::Policy', {
@@ -163,7 +163,7 @@ describe('SummarizationStack (dev)', () => {
     });
   });
 
-  it('Lambda role DynamoDB policy covers at least 2 table resources (jobs + recordings)', () => {
+  it('Lambda role DynamoDB policy covers at least 2 table resources (jobs + sources)', () => {
     // grantReadWriteData on two tables emits two Action arrays in the same policy.
     // Verifying we have ≥2 write statements confirms both grants are present.
     const policies = summarization.findResources('AWS::IAM::Policy', {
@@ -184,7 +184,7 @@ describe('SummarizationStack (dev)', () => {
     );
     if (writeStatements.length < 2) {
       throw new Error(
-        `Expected at least 2 DynamoDB write statements (jobs + recordings), found ${writeStatements.length}`,
+        `Expected at least 2 DynamoDB write statements (jobs + sources), found ${writeStatements.length}`,
       );
     }
   });
