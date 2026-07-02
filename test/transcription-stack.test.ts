@@ -126,8 +126,8 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  it('both task defs inject JOBS_TABLE_NAME, RECORDINGS_TABLE_NAME, AUDIO_BUCKET_NAME', () => {
-    for (const envKey of ['JOBS_TABLE_NAME', 'RECORDINGS_TABLE_NAME', 'AUDIO_BUCKET_NAME']) {
+  it('both task defs inject JOBS_TABLE_NAME, SOURCES_TABLE_NAME, AUDIO_BUCKET_NAME', () => {
+    for (const envKey of ['JOBS_TABLE_NAME', 'SOURCES_TABLE_NAME', 'AUDIO_BUCKET_NAME']) {
       template.hasResourceProperties('AWS::ECS::TaskDefinition', {
         ContainerDefinitions: Match.arrayWith([
           Match.objectLike({

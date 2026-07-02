@@ -21,7 +21,7 @@ export class FoundationStack extends cdk.Stack {
   readonly wildcardCert: acm.Certificate;
 
   // DynamoDB — multi-table (D-031)
-  readonly recordingsTable: dynamodb.Table;
+  readonly sourcesTable: dynamodb.Table;
   readonly orgsTable: dynamodb.Table;
   readonly usersTable: dynamodb.Table;
   readonly jobsTable: dynamodb.Table;
@@ -70,22 +70,22 @@ export class FoundationStack extends cdk.Stack {
 
     // ── DynamoDB — multi-table, PAY_PER_REQUEST, PITR on all (D-031, D-055, D-021) ──
 
-    this.recordingsTable = new dynamodb.Table(this, 'RecordingsTable', {
-      tableName: 'heediq-recordings',
+    this.sourcesTable = new dynamodb.Table(this, 'SourcesTable', {
+      tableName: 'heediq-sources',
       partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy,
     });
-    // Admin list: all org recordings, time-sorted
-    this.recordingsTable.addGlobalSecondaryIndex({
+    // Admin list: all org sources, time-sorted
+    this.sourcesTable.addGlobalSecondaryIndex({
       indexName: 'by-org-created',
       partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
     });
-    // Member view: own recordings, time-sorted (D-021 row-level isolation)
-    this.recordingsTable.addGlobalSecondaryIndex({
+    // Member view: own sources, time-sorted (D-021 row-level isolation)
+    this.sourcesTable.addGlobalSecondaryIndex({
       indexName: 'by-user-created',
       partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
@@ -118,17 +118,17 @@ export class FoundationStack extends cdk.Stack {
       sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
     });
 
-    // PK = recordingId — one active job per recording at MVP; DDB Streams feeds StatusPusher (D-061)
+    // PK = sourceId — one active job per source at MVP; DDB Streams feeds StatusPusher (D-061)
     this.jobsTable = new dynamodb.Table(this, 'JobsTable', {
       tableName: 'heediq-jobs',
-      partitionKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       stream: dynamodb.StreamViewType.NEW_IMAGE,
       removalPolicy,
     });
 
-    // PK = connectionId; GSI by-recording for fan-out; TTL cleans up stale rows (D-061)
+    // PK = connectionId; GSI by-source for fan-out; TTL cleans up stale rows (D-061)
     this.wsConnectionsTable = new dynamodb.Table(this, 'WsConnectionsTable', {
       tableName: 'heediq-ws-connections',
       partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
@@ -137,8 +137,8 @@ export class FoundationStack extends cdk.Stack {
       removalPolicy,
     });
     this.wsConnectionsTable.addGlobalSecondaryIndex({
-      indexName: 'by-recording',
-      partitionKey: { name: 'recordingId', type: dynamodb.AttributeType.STRING },
+      indexName: 'by-source',
+      partitionKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
@@ -152,7 +152,7 @@ export class FoundationStack extends cdk.Stack {
 
     this.transcriptionQueue = new sqs.Queue(this, 'TranscriptionQueue', {
       queueName: 'heediq-transcription',
-      // Covers longest expected paid-tier job (large-v3 + pyannote on CPU, 60-min recording)
+      // Covers longest expected paid-tier job (large-v3 + pyannote on CPU, 60-min source)
       visibilityTimeout: cdk.Duration.seconds(3600),
       deadLetterQueue: { queue: transcriptionDlq, maxReceiveCount: 3 },
       enforceSSL: true,
@@ -317,7 +317,7 @@ export class FoundationStack extends cdk.Stack {
     // ── SSM params — resource locators for all app repos (D-038) ─────────────
 
     const ssmParams: Array<[string, string, string]> = [
-      ['/heediq/api/recordings-table-name', this.recordingsTable.tableName,       'DynamoDB recordings table name'],
+      ['/heediq/api/sources-table-name',     this.sourcesTable.tableName,          'DynamoDB sources table name'],
       ['/heediq/api/orgs-table-name',        this.orgsTable.tableName,             'DynamoDB orgs table name'],
       ['/heediq/api/users-table-name',       this.usersTable.tableName,            'DynamoDB users table name'],
       ['/heediq/api/jobs-table-name',        this.jobsTable.tableName,             'DynamoDB jobs table name'],

@@ -56,12 +56,12 @@ describe('FoundationStack (dev)', () => {
     }
   });
 
-  it('recordings table has correct key schema and 2 GSIs', () => {
+  it('sources table has correct key schema and 2 GSIs', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
-      TableName: 'heediq-recordings',
+      TableName: 'heediq-sources',
       KeySchema: [
         { AttributeName: 'orgId', KeyType: 'HASH' },
-        { AttributeName: 'recordingId', KeyType: 'RANGE' },
+        { AttributeName: 'sourceId', KeyType: 'RANGE' },
       ],
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'by-org-created' }),
@@ -88,21 +88,21 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
-  it('jobs table uses recordingId as partition key with DDB Streams NEW_IMAGE enabled', () => {
+  it('jobs table uses sourceId as partition key with DDB Streams NEW_IMAGE enabled', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-jobs',
-      KeySchema: [{ AttributeName: 'recordingId', KeyType: 'HASH' }],
+      KeySchema: [{ AttributeName: 'sourceId', KeyType: 'HASH' }],
       StreamSpecification: { StreamViewType: 'NEW_IMAGE' },
     });
   });
 
-  it('ws-connections table has connectionId PK, expiresAt TTL, and by-recording GSI', () => {
+  it('ws-connections table has connectionId PK, expiresAt TTL, and by-source GSI', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-ws-connections',
       KeySchema: [{ AttributeName: 'connectionId', KeyType: 'HASH' }],
       TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
       GlobalSecondaryIndexes: Match.arrayWith([
-        Match.objectLike({ IndexName: 'by-recording' }),
+        Match.objectLike({ IndexName: 'by-source' }),
       ]),
     });
   });
@@ -236,7 +236,7 @@ describe('FoundationStack (dev)', () => {
   it('exports all 14 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/infra/cert-arn-eu-west-1',
-      '/heediq/api/recordings-table-name',
+      '/heediq/api/sources-table-name',
       '/heediq/api/orgs-table-name',
       '/heediq/api/users-table-name',
       '/heediq/api/jobs-table-name',

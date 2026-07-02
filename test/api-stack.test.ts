@@ -95,7 +95,7 @@ describe('ApiStack (dev)', () => {
       FunctionName: 'heediq-api',
       Environment: Match.objectLike({
         Variables: Match.objectLike({
-          RECORDINGS_TABLE_NAME:     Match.anyValue(),
+          SOURCES_TABLE_NAME:     Match.anyValue(),
           ORGS_TABLE_NAME:           Match.anyValue(),
           USERS_TABLE_NAME:          Match.anyValue(),
           JOBS_TABLE_NAME:           Match.anyValue(),
