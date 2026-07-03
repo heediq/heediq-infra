@@ -13,8 +13,9 @@ on:
       - 'test/shared-services-stack.test.ts'
   workflow_dispatch:
 
+# AWS_REGION is resolved from the GitHub organization-level Actions variable
+# (D-070) — not hardcoded per repo.
 env:
-  AWS_REGION: eu-west-1
   NODE_VERSION: '22'
 
 jobs:
@@ -61,6 +62,6 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::313828097088:role/GitHubActionsDeployRole
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy shared-services
         run: pnpm cdk deploy --all -c env=shared --require-approval never
