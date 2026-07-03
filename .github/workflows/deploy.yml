@@ -18,8 +18,8 @@ on:
       - 'README.md'
       - 'scripts/**'
 
-# AWS_REGION is resolved from the GitHub organization-level Actions variable
-# (D-070) — not hardcoded per repo.
+# AWS_REGION and deploy role ARNs are resolved from GitHub organization-level
+# Actions variables (D-070, D-071) — not hardcoded per repo.
 env:
   NODE_VERSION: '22'
 
@@ -66,7 +66,7 @@ jobs:
       - name: Configure AWS credentials (dev)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::276594885933:role/GitHubActionsDeployRole
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy to dev
         run: pnpm cdk deploy --all -c env=dev --require-approval never
@@ -93,7 +93,7 @@ jobs:
       - name: Configure AWS credentials (staging)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::475790160542:role/GitHubActionsDeployRole
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_STAGING }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy to staging
         run: pnpm cdk deploy --all -c env=staging --require-approval never
@@ -130,7 +130,7 @@ jobs:
       - name: Configure AWS credentials (prod)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::438825592314:role/GitHubActionsDeployRole
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy to prod
         run: pnpm cdk deploy --all -c env=prod --require-approval never
