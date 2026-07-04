@@ -157,6 +157,21 @@ describe('ApiStack (dev)', () => {
     });
   });
 
+  it('API Lambda role has Cognito Admin actions scoped to the User Pool ARN (D-078)', () => {
+    api.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith([
+              'cognito-idp:AdminSetUserPassword',
+              'cognito-idp:AdminLinkProviderForUser',
+            ]),
+          }),
+        ]),
+      }),
+    });
+  });
+
   it('API Lambda environment includes SUMMARIZATION_QUEUE_URL (D-065)', () => {
     api.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'heediq-api',

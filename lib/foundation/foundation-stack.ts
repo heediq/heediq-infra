@@ -118,6 +118,12 @@ export class FoundationStack extends cdk.Stack {
       partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
     });
+    // Email-as-identity lookup for cross-provider account linking (D-078) — email is
+    // lowercased/trimmed by the writer before every put, never by the table itself.
+    this.usersTable.addGlobalSecondaryIndex({
+      indexName: 'by-email',
+      partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+    });
 
     // PK = sourceId — one active job per source at MVP; DDB Streams feeds StatusPusher (D-061)
     this.jobsTable = new dynamodb.Table(this, 'JobsTable', {
@@ -268,6 +274,12 @@ export class FoundationStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: true,
       },
+      // Native→federated auto-link (D-078) is NOT a separate CFN toggle — Cognito performs it
+      // automatically off `signInAliases: { email: true }` + `autoVerify: { email: true }`
+      // below: a federated sign-in asserting a verified email matching an existing native
+      // user's email alias links to that user's `sub` rather than creating a new one. No
+      // extra config needed here; verify this behavior in dev as part of the D-078 rollout.
+      //
       // custom:orgId / custom:role are set only by AuthProvisionFn (D-077), never by the
       // user or client directly — mutable so the trigger can update them post-creation.
       customAttributes: {

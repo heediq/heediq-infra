@@ -92,6 +92,22 @@ export class ApiStack extends cdk.Stack {
       }),
     );
 
+    // Cognito Admin API — cross-provider account linking (D-078, D-079). Scoped to this
+    // pool's ARN only; AdminSetUserPassword/ConfirmForgotPassword-style flows never create a
+    // new Cognito user, only attach a credential to an existing `sub`.
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'cognito-idp:AdminGetUser',
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminLinkProviderForUser',
+          'cognito-idp:ForgotPassword',
+          'cognito-idp:ConfirmForgotPassword',
+        ],
+        resources: [props.foundation.userPool.userPoolArn],
+      }),
+    );
+
     // ── API Gateway HTTP API (D-034, D-041, D-042) ────────────────────────────
     const httpApi = new apigatewayv2.CfnApi(this, 'HttpApi', {
       name: 'heediq-api',

@@ -88,6 +88,18 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
+  it('users table has email GSI for cross-provider account linking (D-078)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-users',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-email',
+          KeySchema: [{ AttributeName: 'email', KeyType: 'HASH' }],
+        }),
+      ]),
+    });
+  });
+
   it('jobs table uses sourceId as partition key with DDB Streams NEW_IMAGE enabled', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-jobs',
