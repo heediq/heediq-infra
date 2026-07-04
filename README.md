@@ -277,7 +277,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs; read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
 
 **SSM params (ApiStack):**
 
@@ -368,7 +368,7 @@ Replace placeholders with real credentials from Google Cloud Console and Azure p
 | `AuthTriggerPostConfirmationFn` (`POST_CONFIRMATION`) | `PostConfirmation_ConfirmSignUp` | Records the auth method (native `COGNITO` or federated provider) + an audit event; never writes the main `users` row |
 | `AuthTriggerPostAuthenticationFn` (`POST_AUTHENTICATION`) | `PostAuthentication_Authentication` | Records the auth method used for the completed login; auto-links a federated login to an existing native account with the same email if not yet linked |
 
-All three write to `heediq-user-auth-methods`/`heediq-auth-audit-log`; `AuthTriggerPreSignUpFn`/`AuthTriggerPostAuthenticationFn` additionally call Cognito Admin APIs (`AdminCreateUser`, `AdminLinkProviderForUser`, `ListUsers`).
+All three write to `heediq-user-auth-methods`/`heediq-auth-audit-log`; `AuthTriggerPreSignUpFn`/`AuthTriggerPostAuthenticationFn` additionally call Cognito Admin APIs (`AdminCreateUser`, `AdminLinkProviderForUser`, `ListUsers`). All three also receive `USERS_TABLE_NAME` (read-only `grantReadData`), since auto-linking needs to look up the existing native account by email.
 
 **Gotcha — CDK circular dependency avoidance:** these trigger Lambdas' IAM policies cannot reference `this.userPool.userPoolArn` directly. The pool's `LambdaConfig` already depends on the Lambdas via `addTrigger`, so a policy referencing the pool's own live ARN creates a genuine CloudFormation cycle (`UserPool → Lambda → LambdaRolePolicy → UserPool`). Instead, scope the policy to an account/region ARN pattern built from CDK pseudo-parameters: `cdk.Stack.of(this).formatArn({ service: 'cognito-idp', resource: 'userpool', resourceName: '*' })`. This stays account/region-scoped (not a bare `*`) and is safe because each account has exactly one User Pool (D-037).
 
