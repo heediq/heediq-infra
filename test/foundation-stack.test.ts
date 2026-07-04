@@ -33,8 +33,8 @@ describe('FoundationStack (dev)', () => {
 
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
-  it('creates 5 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 5);
+  it('creates 7 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 7);
   });
 
   it('all tables use PAY_PER_REQUEST', () => {
@@ -116,6 +116,26 @@ describe('FoundationStack (dev)', () => {
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'by-source' }),
       ]),
+    });
+  });
+
+  it('user-auth-methods table has pk/sk key schema (D-087)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-user-auth-methods',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('auth-audit-log table has pk/sk key schema (D-087)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-auth-audit-log',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
     });
   });
 
@@ -247,6 +267,48 @@ describe('FoundationStack (dev)', () => {
           USERS_TABLE_NAME: Match.anyValue(),
         }),
       },
+    });
+  });
+
+  it('wires the 3 cross-provider linking triggers (D-087)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: Match.objectLike({
+        PreSignUp: Match.anyValue(),
+        PostConfirmation: Match.anyValue(),
+        PostAuthentication: Match.anyValue(),
+      }),
+    });
+    for (const functionName of [
+      'heediq-auth-trigger-pre-signup',
+      'heediq-auth-trigger-post-confirmation',
+      'heediq-auth-trigger-post-authentication',
+    ]) {
+      template.hasResourceProperties('AWS::Lambda::Function', { FunctionName: functionName });
+    }
+  });
+
+  it('pre-signup and post-authentication triggers get least-privilege Cognito IAM, scoped to account/region not `*`', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'PreSignUpCognitoAccess',
+            Action: Match.arrayWith(['cognito-idp:AdminLinkProviderForUser']),
+            Resource: Match.objectLike({ 'Fn::Join': Match.anyValue() }),
+          }),
+        ]),
+      }),
+    });
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'PostAuthenticationCognitoAccess',
+            Action: Match.arrayWith(['cognito-idp:AdminLinkProviderForUser']),
+            Resource: Match.objectLike({ 'Fn::Join': Match.anyValue() }),
+          }),
+        ]),
+      }),
     });
   });
 
