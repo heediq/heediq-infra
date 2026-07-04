@@ -38,6 +38,8 @@ export class ApiStack extends cdk.Stack {
         USERS_TABLE_NAME:          props.foundation.usersTable.tableName,
         JOBS_TABLE_NAME:           props.foundation.jobsTable.tableName,
         WS_CONNECTIONS_TABLE_NAME: props.foundation.wsConnectionsTable.tableName,
+        USER_AUTH_METHODS_TABLE_NAME: props.foundation.userAuthMethodsTable.tableName,
+        AUTH_AUDIT_LOG_TABLE_NAME:    props.foundation.authAuditLogTable.tableName,
         AUDIO_BUCKET_NAME:         props.foundation.audioUploadsBucket.bucketName,
         TRANSCRIPTION_QUEUE_URL:   props.foundation.transcriptionQueue.queueUrl,
         COGNITO_USER_POOL_ID:      props.foundation.userPool.userPoolId,
@@ -54,6 +56,8 @@ export class ApiStack extends cdk.Stack {
     props.foundation.usersTable.grantReadWriteData(apiFn);
     props.foundation.jobsTable.grantReadWriteData(apiFn);
     props.foundation.wsConnectionsTable.grantReadData(apiFn);
+    props.foundation.userAuthMethodsTable.grantReadWriteData(apiFn);
+    props.foundation.authAuditLogTable.grantWriteData(apiFn);
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);
@@ -92,17 +96,22 @@ export class ApiStack extends cdk.Stack {
       }),
     );
 
-    // Cognito Admin API — cross-provider account linking (D-078, D-079). Scoped to this
-    // pool's ARN only; AdminSetUserPassword/ConfirmForgotPassword-style flows never create a
-    // new Cognito user, only attach a credential to an existing `sub`.
+    // Cognito Admin API — cross-provider account linking (D-078, D-087). SignUp/
+    // ConfirmSignUp/ResendConfirmationCode drive the request-otp/confirm endpoints (D-087,
+    // reusing Cognito's own verification-code delivery instead of custom OTP+SES). ListUsers
+    // resolves the existing federated identity to link; AdminSetUserPassword/
+    // AdminLinkProviderForUser attach the password and link the provider — never create a new
+    // Cognito user themselves (SignUp does that part). Scoped to this pool's ARN only.
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'cognito-idp:AdminGetUser',
           'cognito-idp:AdminSetUserPassword',
           'cognito-idp:AdminLinkProviderForUser',
-          'cognito-idp:ForgotPassword',
-          'cognito-idp:ConfirmForgotPassword',
+          'cognito-idp:SignUp',
+          'cognito-idp:ConfirmSignUp',
+          'cognito-idp:ResendConfirmationCode',
+          'cognito-idp:ListUsers',
         ],
         resources: [props.foundation.userPool.userPoolArn],
       }),
