@@ -325,11 +325,17 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 |---|---|---|---|---|
 | `heediq-sources` | `orgId` | `sourceId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | — |
 | `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) | — |
-| `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId) | — |
+| `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId), `by-email` (PK=email) | — |
 | `heediq-jobs` | `sourceId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
 | `heediq-ws-connections` | `connectionId` | — | `by-source` (PK=`sourceId`), TTL on `expiresAt` | — |
+| `heediq-user-auth-methods` | `pk` | `sk` | — | — |
+| `heediq-auth-audit-log` | `pk` | `sk` | — | — |
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
+
+`heediq-users.by-email` (PK=`email`) backs the email-as-identity lookup for cross-provider account linking (D-078) — the writer lowercases/trims email before every put; the table itself does no normalization.
+
+`heediq-user-auth-methods`/`heediq-auth-audit-log` (D-087) share one key shape: `pk = USER#<canonicalAccountId>`; `sk = METHOD#<PROVIDER>` (one idempotent row per linked sign-in method, conditional put on `attribute_not_exists`) in the methods table, `sk = EVENT#<isoTimestamp>` (append-only) in the audit table.
 
 ### FoundationStack Cognito — prerequisite before first deploy
 
@@ -351,6 +357,20 @@ aws ssm put-parameter --name /heediq/auth/microsoft-issuer-url \
 Replace placeholders with real credentials from Google Cloud Console and Azure portal (D-020). Email/password auth works immediately; federated sign-in activates once real credentials are set.
 
 **Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
+
+### FoundationStack Cognito triggers (D-087)
+
+3 Lambda triggers wired on the User Pool, real code deployed by `heediq-api` CI (placeholder inline code in the stack, same pattern as `auth-provision.ts`/PreTokenGeneration):
+
+| Trigger | Fires on | Purpose |
+|---|---|---|
+| `AuthTriggerPreSignUpFn` (`PRE_SIGN_UP`) | `PreSignUp_ExternalProvider` | Links a brand-new federated login onto a matching native account by email before Cognito creates the external-provider user |
+| `AuthTriggerPostConfirmationFn` (`POST_CONFIRMATION`) | `PostConfirmation_ConfirmSignUp` | Records the auth method (native `COGNITO` or federated provider) + an audit event; never writes the main `users` row |
+| `AuthTriggerPostAuthenticationFn` (`POST_AUTHENTICATION`) | `PostAuthentication_Authentication` | Records the auth method used for the completed login; auto-links a federated login to an existing native account with the same email if not yet linked |
+
+All three write to `heediq-user-auth-methods`/`heediq-auth-audit-log`; `AuthTriggerPreSignUpFn`/`AuthTriggerPostAuthenticationFn` additionally call Cognito Admin APIs (`AdminCreateUser`, `AdminLinkProviderForUser`, `ListUsers`).
+
+**Gotcha — CDK circular dependency avoidance:** these trigger Lambdas' IAM policies cannot reference `this.userPool.userPoolArn` directly. The pool's `LambdaConfig` already depends on the Lambdas via `addTrigger`, so a policy referencing the pool's own live ARN creates a genuine CloudFormation cycle (`UserPool → Lambda → LambdaRolePolicy → UserPool`). Instead, scope the policy to an account/region ARN pattern built from CDK pseudo-parameters: `cdk.Stack.of(this).formatArn({ service: 'cognito-idp', resource: 'userpool', resourceName: '*' })`. This stays account/region-scoped (not a bare `*`) and is safe because each account has exactly one User Pool (D-037).
 
 ### SummarizationStack — prerequisite before first Lambda invocation
 
