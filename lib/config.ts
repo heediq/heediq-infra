@@ -47,8 +47,10 @@ export const EMAIL = {
 // D-055 / D-059 — all environments use identical sizing at launch; scale when metrics demand it
 export const COMPUTE = {
   lambda: {
-    api:           { memoryMB: 512, timeoutSecs: 30  },
-    summarization: { memoryMB: 512, timeoutSecs: 300 },
+    api:            { memoryMB: 512, timeoutSecs: 30  },
+    summarization:  { memoryMB: 512, timeoutSecs: 300 },
+    // Fires on every token issuance (D-077) — must stay fast, well under Cognito's 5s trigger timeout
+    authProvision:  { memoryMB: 256, timeoutSecs: 5   },
   },
   // D-059: EC2 GPU Spot (g4dn.xlarge). One ASG, one capacity provider — both tiers share the pool.
   // Model choice (free=small / paid=large-v3+pyannote) is enforced at API layer (D-060).

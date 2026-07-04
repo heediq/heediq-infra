@@ -212,6 +212,32 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
+  it('User Pool defines custom:orgId and custom:role attributes', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      Schema: Match.arrayWith([
+        Match.objectLike({ Name: 'orgId', Mutable: true }),
+        Match.objectLike({ Name: 'role', Mutable: true }),
+      ]),
+    });
+  });
+
+  it('wires the auth-provision Lambda as the PreTokenGeneration trigger (D-077)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: Match.objectLike({
+        PreTokenGeneration: Match.anyValue(),
+      }),
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-auth-provision',
+      Environment: {
+        Variables: Match.objectLike({
+          ORGS_TABLE_NAME: Match.anyValue(),
+          USERS_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
   // ── S3 bucket policies ────────────────────────────────────────────────────
 
   it('web-assets bucket policy allows cloudfront.amazonaws.com with source-account condition (OAC)', () => {
@@ -233,7 +259,7 @@ describe('FoundationStack (dev)', () => {
 
   // ── SSM params ─────────────────────────────────────────────────────────────
 
-  it('exports all 14 required SSM parameters', () => {
+  it('exports all 15 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/infra/cert-arn-eu-west-1',
       '/heediq/api/sources-table-name',
@@ -247,6 +273,7 @@ describe('FoundationStack (dev)', () => {
       '/heediq/api/cognito-user-pool-id',
       '/heediq/api/cognito-user-pool-arn',
       '/heediq/api/cognito-client-id',
+      '/heediq/api/cognito-hosted-ui-domain',
       '/heediq/api/ses-sending-role-arn',
       '/heediq/api/ws-connections-table-name',
     ];

@@ -6,9 +6,10 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS, ACCOUNTS } from '../config';
+import { WorkloadEnv, DOMAINS, ACCOUNTS, COMPUTE } from '../config';
 
 export interface FoundationStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
@@ -231,6 +232,28 @@ export class FoundationStack extends cdk.Stack {
       },
     }));
 
+    // ── Auth provisioning Lambda trigger (D-077) ──────────────────────────────
+    // Fires on every token issuance (native email/password AND federated Google/Microsoft —
+    // PreTokenGeneration is the only trigger guaranteed to fire for both). Idempotent
+    // get-or-create of Org+User in DynamoDB, then injects custom:orgId/custom:role claims.
+    // Real code deployed by heediq-api CI (same pattern as ApiStack.apiFn) — placeholder here.
+    const authProvisionFn = new lambda.Function(this, 'AuthProvisionFn', {
+      functionName: 'heediq-auth-provision',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'auth-provision.handler',
+      code: lambda.Code.fromInline(
+        'exports.handler = async (event) => event;',
+      ),
+      memorySize: COMPUTE.lambda.authProvision.memoryMB,
+      timeout: cdk.Duration.seconds(COMPUTE.lambda.authProvision.timeoutSecs),
+      environment: {
+        ORGS_TABLE_NAME: this.orgsTable.tableName,
+        USERS_TABLE_NAME: this.usersTable.tableName,
+      },
+    });
+    this.orgsTable.grantReadWriteData(authProvisionFn);
+    this.usersTable.grantReadWriteData(authProvisionFn);
+
     // ── Cognito User Pool (D-020) ─────────────────────────────────────────────
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
@@ -245,12 +268,21 @@ export class FoundationStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: true,
       },
+      // custom:orgId / custom:role are set only by AuthProvisionFn (D-077), never by the
+      // user or client directly — mutable so the trigger can update them post-creation.
+      customAttributes: {
+        orgId: new cognito.StringAttribute({ mutable: true }),
+        role: new cognito.StringAttribute({ mutable: true }),
+      },
+      lambdaTriggers: {
+        preTokenGeneration: authProvisionFn,
+      },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy,
     });
 
     // Hosted domain for OAuth redirects. Custom auth.heediq.com deferred (extra cert + DNS).
-    this.userPool.addDomain('UserPoolDomain', {
+    const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {
       cognitoDomain: { domainPrefix: `heediq-${props.workloadEnv}` },
     });
 
@@ -328,6 +360,7 @@ export class FoundationStack extends cdk.Stack {
       ['/heediq/api/cognito-user-pool-id',   this.userPool.userPoolId,             'Cognito User Pool ID'],
       ['/heediq/api/cognito-user-pool-arn',  this.userPool.userPoolArn,            'Cognito User Pool ARN'],
       ['/heediq/api/cognito-client-id',      this.userPoolClient.userPoolClientId, 'Cognito App Client ID'],
+      ['/heediq/api/cognito-hosted-ui-domain',    userPoolDomain.baseUrl(),        'Cognito Hosted UI base URL (OAuth authorize/token/logout endpoints)'],
       // Deterministic ARN — role created in SharedServicesStack (D-058)
       ['/heediq/api/ses-sending-role-arn',        `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`, 'Cross-account IAM role for SES email sending'],
       ['/heediq/api/ws-connections-table-name',   this.wsConnectionsTable.tableName,              'DynamoDB WebSocket connections table name'],
