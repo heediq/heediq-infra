@@ -27,6 +27,8 @@ export class FoundationStack extends cdk.Stack {
   readonly usersTable: dynamodb.Table;
   readonly jobsTable: dynamodb.Table;
   readonly wsConnectionsTable: dynamodb.Table;
+  readonly userAuthMethodsTable: dynamodb.Table;
+  readonly authAuditLogTable: dynamodb.Table;
 
   // S3
   readonly audioUploadsBucket: s3.Bucket;
@@ -123,6 +125,27 @@ export class FoundationStack extends cdk.Stack {
     this.usersTable.addGlobalSecondaryIndex({
       indexName: 'by-email',
       partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Auth methods-per-account + audit trail for cross-provider linking (D-087, replicating
+    // EmotiXOrg/emotix-infra's schema). PK = `USER#<accountId>`; SK differs by table:
+    // `METHOD#<PROVIDER>` (one row per linked sign-in method) vs `EVENT#<isoTimestamp>` (append-only).
+    this.userAuthMethodsTable = new dynamodb.Table(this, 'UserAuthMethodsTable', {
+      tableName: 'heediq-user-auth-methods',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+
+    this.authAuditLogTable = new dynamodb.Table(this, 'AuthAuditLogTable', {
+      tableName: 'heediq-auth-audit-log',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
     });
 
     // PK = sourceId — one active job per source at MVP; DDB Streams feeds StatusPusher (D-061)
@@ -274,12 +297,6 @@ export class FoundationStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: true,
       },
-      // Native→federated auto-link (D-078) is NOT a separate CFN toggle — Cognito performs it
-      // automatically off `signInAliases: { email: true }` + `autoVerify: { email: true }`
-      // below: a federated sign-in asserting a verified email matching an existing native
-      // user's email alias links to that user's `sub` rather than creating a new one. No
-      // extra config needed here; verify this behavior in dev as part of the D-078 rollout.
-      //
       // custom:orgId / custom:role are set only by AuthProvisionFn (D-077), never by the
       // user or client directly — mutable so the trigger can update them post-creation.
       customAttributes: {
@@ -297,6 +314,91 @@ export class FoundationStack extends cdk.Stack {
     const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {
       cognitoDomain: { domainPrefix: `heediq-${props.workloadEnv}` },
     });
+
+    // ── Cross-provider account-linking triggers (D-087) ───────────────────────
+    // Replicates EmotiXOrg/emotix-infra's proven pattern: explicit Lambda triggers (not
+    // Cognito's built-in attribute-based auto-link) so linking gets a DynamoDB audit trail
+    // and a canonical-account-id resolution step (needed for `/auth/methods` to show one
+    // consistent method list regardless of which session — native or federated — is active).
+    // Declared after `this.userPool` purely for readability (grouped with the pool below);
+    // IAM below is scoped by account/region pattern, not the pool's own ARN token — see
+    // the comment above `userPoolArnPattern` for why a direct ARN reference isn't possible.
+    // Real code deployed by heediq-api CI (same pattern as AuthProvisionFn above).
+    const authTriggerPreSignUpFn = new lambda.Function(this, 'AuthTriggerPreSignUpFn', {
+      functionName: 'heediq-auth-trigger-pre-signup',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'auth-trigger-pre-signup.handler',
+      code: lambda.Code.fromInline('exports.handler = async (event) => event;'),
+      memorySize: COMPUTE.lambda.authTrigger.memoryMB,
+      timeout: cdk.Duration.seconds(COMPUTE.lambda.authTrigger.timeoutSecs),
+      environment: {
+        USERS_TABLE_NAME: this.usersTable.tableName,
+        USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
+      },
+    });
+
+    const authTriggerPostConfirmationFn = new lambda.Function(this, 'AuthTriggerPostConfirmationFn', {
+      functionName: 'heediq-auth-trigger-post-confirmation',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'auth-trigger-post-confirmation.handler',
+      code: lambda.Code.fromInline('exports.handler = async (event) => event;'),
+      memorySize: COMPUTE.lambda.authTrigger.memoryMB,
+      timeout: cdk.Duration.seconds(COMPUTE.lambda.authTrigger.timeoutSecs),
+      environment: {
+        USERS_TABLE_NAME: this.usersTable.tableName,
+        USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
+        AUTH_AUDIT_LOG_TABLE_NAME: this.authAuditLogTable.tableName,
+      },
+    });
+
+    const authTriggerPostAuthenticationFn = new lambda.Function(this, 'AuthTriggerPostAuthenticationFn', {
+      functionName: 'heediq-auth-trigger-post-authentication',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'auth-trigger-post-authentication.handler',
+      code: lambda.Code.fromInline('exports.handler = async (event) => event;'),
+      memorySize: COMPUTE.lambda.authTrigger.memoryMB,
+      timeout: cdk.Duration.seconds(COMPUTE.lambda.authTrigger.timeoutSecs),
+      environment: {
+        USERS_TABLE_NAME: this.usersTable.tableName,
+        USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
+        AUTH_AUDIT_LOG_TABLE_NAME: this.authAuditLogTable.tableName,
+      },
+    });
+
+    for (const fn of [authTriggerPreSignUpFn, authTriggerPostConfirmationFn, authTriggerPostAuthenticationFn]) {
+      this.usersTable.grantReadData(fn);
+      this.userAuthMethodsTable.grantReadWriteData(fn);
+    }
+    this.authAuditLogTable.grantWriteData(authTriggerPostConfirmationFn);
+    this.authAuditLogTable.grantWriteData(authTriggerPostAuthenticationFn);
+
+    // pre-signup needs to create/query Cognito users directly (auto-heal + link-lookup);
+    // post-authentication needs the same plus AdminLinkProviderForUser. Can't scope to
+    // `this.userPool.userPoolArn` directly: that token creates a CFN dependency back onto
+    // the pool resource, which already depends on these functions via addTrigger below —
+    // a circular reference CloudFormation rejects. Scoping to account/region instead (one
+    // pool per account per D-037, so this is still account/region-scoped, not a bare `*`).
+    const userPoolArnPattern = cdk.Stack.of(this).formatArn({
+      service: 'cognito-idp',
+      resource: 'userpool',
+      resourceName: '*',
+    });
+    authTriggerPreSignUpFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'PreSignUpCognitoAccess',
+      actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminCreateUser', 'cognito-idp:AdminLinkProviderForUser'],
+      resources: [userPoolArnPattern],
+    }));
+    authTriggerPostAuthenticationFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'PostAuthenticationCognitoAccess',
+      actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminLinkProviderForUser'],
+      resources: [userPoolArnPattern],
+    }));
+
+    // Wired via addTrigger (not the lambdaTriggers prop above) since these functions are
+    // declared after pool construction.
+    this.userPool.addTrigger(cognito.UserPoolOperation.PRE_SIGN_UP, authTriggerPreSignUpFn);
+    this.userPool.addTrigger(cognito.UserPoolOperation.POST_CONFIRMATION, authTriggerPostConfirmationFn);
+    this.userPool.addTrigger(cognito.UserPoolOperation.POST_AUTHENTICATION, authTriggerPostAuthenticationFn);
 
     // Federated IdP credentials live in Secrets Manager — set real values after registering
     // OAuth apps with Google Cloud Console and Azure portal (D-020). Pool deploys with

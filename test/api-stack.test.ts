@@ -100,6 +100,8 @@ describe('ApiStack (dev)', () => {
           USERS_TABLE_NAME:          Match.anyValue(),
           JOBS_TABLE_NAME:           Match.anyValue(),
           WS_CONNECTIONS_TABLE_NAME: Match.anyValue(),
+          USER_AUTH_METHODS_TABLE_NAME: Match.anyValue(),
+          AUTH_AUDIT_LOG_TABLE_NAME:    Match.anyValue(),
           AUDIO_BUCKET_NAME:         Match.anyValue(),
           TRANSCRIPTION_QUEUE_URL:   Match.anyValue(),
           COGNITO_USER_POOL_ID:      Match.anyValue(),
@@ -157,7 +159,7 @@ describe('ApiStack (dev)', () => {
     });
   });
 
-  it('API Lambda role has Cognito Admin actions scoped to the User Pool ARN (D-078)', () => {
+  it('API Lambda role has Cognito Admin + SignUp-flow actions scoped to the User Pool ARN (D-078, D-087)', () => {
     api.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -165,6 +167,10 @@ describe('ApiStack (dev)', () => {
             Action: Match.arrayWith([
               'cognito-idp:AdminSetUserPassword',
               'cognito-idp:AdminLinkProviderForUser',
+              'cognito-idp:SignUp',
+              'cognito-idp:ConfirmSignUp',
+              'cognito-idp:ResendConfirmationCode',
+              'cognito-idp:ListUsers',
             ]),
           }),
         ]),
