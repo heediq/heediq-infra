@@ -20,6 +20,7 @@ resources themselves.
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
 - `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061)
 - `lib/summarization/summarization-stack.ts` — SQS queue + Lambda (Claude extraction worker, D-065)
+- `lib/observability/observability-stack.ts` — per-env CloudWatch dashboard (D-085)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
 
 ## Stack Map
@@ -35,6 +36,7 @@ resources themselves.
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker, D-065) |
 | `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061) |
+| `HeediqObservabilityStack` | per env | eu-west-1 | CloudWatch dashboard — Lambda/SQS/ECS metrics + job-stage log-funnel widget (D-085) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -252,7 +254,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 |---|---|
 | SQS queue | `heediq-summarization` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
 | DLQ | `heediq-summarization-dlq` — 14-day retention; receives after 3 failed attempts |
-| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
+| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). X-Ray active tracing (D-085). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
 | IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-sources` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
 **Message flow (D-065, D-067):**
@@ -275,7 +277,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 
 | Resource | Details |
 |---|---|
-| API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
+| API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). X-Ray active tracing (D-085). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
 | IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
@@ -286,6 +288,31 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 |---|---|
 | `/heediq/api/endpoint-url` | `https://api-{env}.heediq.com` — consumed by `heediq-web` |
 | `/heediq/api/regional-domain-name` | API Gateway REST regional domain name — Route 53 A-alias target |
+
+### ObservabilityStack resources (D-085)
+
+Native AWS observability — CloudWatch + X-Ray, no Grafana/separate tool. One dashboard per
+environment (`heediq-{env}`). The stack takes **no construct props** — it builds every
+`cloudwatch.Metric` from other stacks' well-known static resource names (D-037: no env prefix),
+so its deploy/redeploy never couples to another stack's synth order.
+
+| Widget | Metrics |
+|---|---|
+| API Lambda — Errors & Invocations | `AWS/Lambda` `Invocations`/`Errors`, dimension `FunctionName=heediq-api` |
+| API Lambda — Duration (p50/p99) | `AWS/Lambda` `Duration` on `heediq-api` |
+| Summarization Lambda — Errors & Invocations | Same metrics, `FunctionName=heediq-summarization` |
+| Summarization Lambda — Duration (p50/p99) | `AWS/Lambda` `Duration` on `heediq-summarization` |
+| SQS — Queue Depth | `AWS/SQS` `ApproximateNumberOfMessagesVisible` on `heediq-transcription` + `heediq-summarization` |
+| SQS — DLQ Message Counts | Same metric on `heediq-transcription-dlq` + `heediq-summarization-dlq` |
+| Transcription GPU Fleet Health | `AWS/AutoScaling` `GroupInServiceInstances` on `heediq-transcription-asg`; `AWS/ECS` `CPUReservation` on cluster `heediq-transcription` |
+| Transcription Job Stage Funnel | Logs Insights query (`filter message = 'Job status changed' \| stats count(*) by status`) over log group `/heediq/transcription` |
+
+**X-Ray active tracing** is enabled directly on `ApiStack`'s `ApiFn` and `SummarizationStack`'s
+`SummarizationFn` (`tracing: lambda.Tracing.ACTIVE`) — request-level traces complement the
+dashboard's aggregate metrics. **No X-Ray sidecar on the transcription ECS worker** — it's a
+one-shot batch task (one `RunTask` = one job, D-066), not a long-lived service, so the added
+complexity/cost of an X-Ray daemon sidecar isn't justified. Its structured logs (`source_id`
+correlation, D-085) are the funnel widget's data source instead.
 
 ### WorkloadCfCertStack resources (D-053)
 
