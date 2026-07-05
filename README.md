@@ -194,6 +194,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | `/heediq/api/cognito-user-pool-id` | Cognito User Pool ID |
 | `/heediq/api/cognito-user-pool-arn` | Cognito User Pool ARN |
 | `/heediq/api/cognito-client-id` | Cognito App Client ID (no secret — public browser client) |
+| `/heediq/api/cognito-hosted-ui-domain` | Cognito Hosted UI base URL (OAuth authorize/token/logout endpoints) — consumed by `heediq-web`'s deploy pipeline as `VITE_COGNITO_DOMAIN` |
 | `/heediq/api/ses-sending-role-arn` | IAM role ARN in shared-services account for cross-account SES sending (D-058) |
 
 ### TranscriptionStack resources
@@ -832,7 +833,7 @@ aws secretsmanager put-secret-value --secret-id /heediq/summarization/anthropic-
 aws ssm get-parameters-by-path --path /heediq --recursive \
   --query "Parameters[].{Name:Name}" --profile heediq-staging
 
-# Expected count: ~22 params (foundation: 14, api: 2, websocket: 2, summarization: 3, web: 2)
+# Expected count: ~24 params (foundation: 15, api: 2, websocket: 2, summarization: 3, web: 2)
 # Plus /heediq/infra/cert-arn-us-east-1 in us-east-1 (separate region — check separately)
 
 # Confirm both certs are ISSUED
