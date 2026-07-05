@@ -7,7 +7,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as pipes from 'aws-cdk-lib/aws-pipes';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, COMPUTE, ACCOUNTS, AWS_REGION } from '../config';
+import { WorkloadEnv, COMPUTE, ACCOUNTS, AWS_REGION, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 
 export interface TranscriptionStackProps extends cdk.StackProps {
@@ -21,10 +21,11 @@ export class TranscriptionStack extends cdk.Stack {
     const { foundation } = props;
 
     // ── CloudWatch log group ──────────────────────────────────────────────────
-    // Structured logs only — no PII (transcript text, audio URLs) per D-038
+    // Structured logs only — no PII (transcript text, audio URLs) per D-038.
+    // Explicit per-env retention (D-093): 30 days dev/staging, 90 days prod.
     const logGroup = new logs.LogGroup(this, 'TranscriptionLogGroup', {
       logGroupName: '/heediq/transcription',
-      retention: logs.RetentionDays.ONE_MONTH,
+      retention: logRetentionFor(props.workloadEnv),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 

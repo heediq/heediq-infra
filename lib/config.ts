@@ -1,3 +1,5 @@
+import * as logs from 'aws-cdk-lib/aws-logs';
+
 export const AWS_REGION = 'eu-west-1';
 export const CERT_REGION = 'us-east-1'; // CloudFront ACM certs must be in us-east-1 (D-053)
 
@@ -9,6 +11,13 @@ export const ACCOUNTS = {
 } as const;
 
 export type WorkloadEnv = 'dev' | 'staging' | 'prod';
+
+// D-093: every Lambda/log-producing resource must set an explicit CloudWatch Logs retention —
+// "Never Expire" (the CDK default when no LogGroup/logRetention is configured) is disallowed.
+// 30 days is enough for dev/staging debugging; prod keeps 90 days for longer incident lookback.
+export function logRetentionFor(workloadEnv: WorkloadEnv): logs.RetentionDays {
+  return workloadEnv === 'prod' ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.ONE_MONTH;
+}
 
 export const DOMAINS = {
   root: 'heediq.com',

@@ -2,9 +2,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES, COMPUTE } from '../config';
+import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES, COMPUTE, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 import { Route53AliasRecord } from '../shared/route53-alias-record';
 
@@ -18,6 +19,14 @@ export class ApiStack extends cdk.Stack {
     super(scope, id, props);
 
     const apiDomain = DOMAINS.api[props.workloadEnv];
+
+    // ── CloudWatch log group (D-093) ──────────────────────────────────────────
+    // Explicit retention — the CDK default (no LogGroup/logRetention) is "Never Expire".
+    const apiLogGroup = new logs.LogGroup(this, 'ApiLogGroup', {
+      logGroupName: '/aws/lambda/heediq-api',
+      retention: logRetentionFor(props.workloadEnv),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
     // ── API Lambda — Hono REST API (D-034) ────────────────────────────────────
     // Actual implementation deployed by heediq-api CI. This construct owns the IAM role,
@@ -33,6 +42,7 @@ export class ApiStack extends cdk.Stack {
       memorySize: COMPUTE.lambda.api.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.api.timeoutSecs),
       tracing: lambda.Tracing.ACTIVE, // D-085 — X-Ray active tracing, no separate observability tool
+      logGroup: apiLogGroup, // D-093 — explicit retention, no unbounded log storage
       environment: {
         SOURCES_TABLE_NAME:        props.foundation.sourcesTable.tableName,
         ORGS_TABLE_NAME:           props.foundation.orgsTable.tableName,
