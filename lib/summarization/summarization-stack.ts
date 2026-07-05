@@ -2,10 +2,11 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import { WorkloadEnv, COMPUTE } from '../config';
+import { WorkloadEnv, COMPUTE, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 
 export interface SummarizationStackProps extends cdk.StackProps {
@@ -42,6 +43,14 @@ export class SummarizationStack extends cdk.Stack {
       enforceSSL: true,
     });
 
+    // ── CloudWatch log group (D-093) ──────────────────────────────────────────
+    // Explicit retention — the CDK default (no LogGroup/logRetention) is "Never Expire".
+    const summarizationLogGroup = new logs.LogGroup(this, 'SummarizationLogGroup', {
+      logGroupName: '/aws/lambda/heediq-summarization',
+      retention: logRetentionFor(props.workloadEnv),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ── Lambda — Claude API extraction worker (D-032, D-055) ─────────────────
     // Actual implementation deployed by heediq-worker-summarization CI (D-043, D-050).
     // Placeholder code replaced on first deploy from that repo.
@@ -55,6 +64,8 @@ export class SummarizationStack extends cdk.Stack {
       ),
       memorySize: COMPUTE.lambda.summarization.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.summarization.timeoutSecs),
+      tracing: lambda.Tracing.ACTIVE, // D-085 — X-Ray active tracing, no separate observability tool
+      logGroup: summarizationLogGroup, // D-093 — explicit retention, no unbounded log storage
       environment: {
         JOBS_TABLE_NAME:       foundation.jobsTable.tableName,
         SOURCES_TABLE_NAME: foundation.sourcesTable.tableName,

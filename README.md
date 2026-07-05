@@ -12,7 +12,7 @@ resources themselves.
 ## Key Files
 
 - `bin/infra.ts` — CDK app entry; selects stacks by `-c env=<shared|dev|staging|prod>`
-- `lib/config.ts` — all locked constants (account IDs, region, domains, compute sizing)
+- `lib/config.ts` — all locked constants (account IDs, region, domains, compute sizing) + `logRetentionFor(workloadEnv)` (D-093 — 30 days dev/staging, 90 days prod)
 - `lib/shared-services/shared-services-stack.ts` — ECR, Route 53, ACM certs, SES identity + DKIM, cross-account email role
 - `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
@@ -20,6 +20,7 @@ resources themselves.
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
 - `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061)
 - `lib/summarization/summarization-stack.ts` — SQS queue + Lambda (Claude extraction worker, D-065)
+- `lib/observability/observability-stack.ts` — per-env CloudWatch dashboard (D-085)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
 
 ## Stack Map
@@ -35,6 +36,7 @@ resources themselves.
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker, D-065) |
 | `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061) |
+| `HeediqObservabilityStack` | per env | eu-west-1 | CloudWatch dashboard — Lambda/SQS/ECS metrics + job-stage log-funnel widget (D-085) |
 
 Stack names carry no environment prefix — the account boundary is the environment boundary (D-037).
 The same stack name (`HeediqFoundationStack`) exists in each workload account independently.
@@ -205,7 +207,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 |---|---|
 | ECS cluster | `heediq-transcription` |
 | VPC | `heediq-transcription` — public subnets only (eu-west-1a/b), no NAT gateway |
-| CloudWatch log group | `/heediq/transcription` (30-day retention; no PII logged, D-038) |
+| CloudWatch log group | `/heediq/transcription` (30-day retention dev/staging, 90-day prod, D-093; no PII logged, D-038) |
 | EC2 instance type | g4dn.xlarge — T4 GPU (16 GB VRAM), 4 vCPU, 16 GB RAM; Spot, capacity-optimized allocation |
 | Auto Scaling Group | `heediq-transcription-asg` — min=0, max=N; managed by ECS capacity provider |
 | Launch Template | ECS-optimized GPU AMI (CUDA + nvidia-container-toolkit + ECS agent pre-configured); user-data registers instance with ECS cluster |
@@ -252,7 +254,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 |---|---|
 | SQS queue | `heediq-summarization` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
 | DLQ | `heediq-summarization-dlq` — 14-day retention; receives after 3 failed attempts |
-| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
+| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-summarization` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
 | IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-sources` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
 **Message flow (D-065, D-067):**
@@ -275,7 +277,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 
 | Resource | Details |
 |---|---|
-| API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
+| API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-api` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
 | IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
@@ -286,6 +288,31 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 |---|---|
 | `/heediq/api/endpoint-url` | `https://api-{env}.heediq.com` — consumed by `heediq-web` |
 | `/heediq/api/regional-domain-name` | API Gateway REST regional domain name — Route 53 A-alias target |
+
+### ObservabilityStack resources (D-085)
+
+Native AWS observability — CloudWatch + X-Ray, no Grafana/separate tool. One dashboard per
+environment (`heediq-{env}`). The stack takes **no construct props** — it builds every
+`cloudwatch.Metric` from other stacks' well-known static resource names (D-037: no env prefix),
+so its deploy/redeploy never couples to another stack's synth order.
+
+| Widget | Metrics |
+|---|---|
+| API Lambda — Errors & Invocations | `AWS/Lambda` `Invocations`/`Errors`, dimension `FunctionName=heediq-api` |
+| API Lambda — Duration (p50/p99) | `AWS/Lambda` `Duration` on `heediq-api` |
+| Summarization Lambda — Errors & Invocations | Same metrics, `FunctionName=heediq-summarization` |
+| Summarization Lambda — Duration (p50/p99) | `AWS/Lambda` `Duration` on `heediq-summarization` |
+| SQS — Queue Depth | `AWS/SQS` `ApproximateNumberOfMessagesVisible` on `heediq-transcription` + `heediq-summarization` |
+| SQS — DLQ Message Counts | Same metric on `heediq-transcription-dlq` + `heediq-summarization-dlq` |
+| Transcription GPU Fleet Health | `AWS/AutoScaling` `GroupInServiceInstances` on `heediq-transcription-asg`; `AWS/ECS` `CPUReservation` on cluster `heediq-transcription` |
+| Transcription Job Stage Funnel | Logs Insights query (`filter message = 'Job status changed' \| stats count(*) by status`) over log group `/heediq/transcription` |
+
+**X-Ray active tracing** is enabled directly on `ApiStack`'s `ApiFn` and `SummarizationStack`'s
+`SummarizationFn` (`tracing: lambda.Tracing.ACTIVE`) — request-level traces complement the
+dashboard's aggregate metrics. **No X-Ray sidecar on the transcription ECS worker** — it's a
+one-shot batch task (one `RunTask` = one job, D-066), not a long-lived service, so the added
+complexity/cost of an X-Ray daemon sidecar isn't justified. Its structured logs (`source_id`
+correlation, D-085) are the funnel widget's data source instead.
 
 ### WorkloadCfCertStack resources (D-053)
 
@@ -894,3 +921,5 @@ bash scripts/setup-budgets.sh
 - **`cdk.context.json` must include AZ entries for each workload account** — `ec2.Vpc` in an environment-bound stack triggers an AZ lookup. Without a cache entry, `cdk synth` fails in CI (which has no AWS credentials in the `validate` job, D-043). The file is committed with `eu-west-1a/b/c` for dev/staging/prod accounts. If an account is re-created or a new account is added, append the corresponding entry. Values: `"availability-zones:account=<id>:region=eu-west-1": ["eu-west-1a", "eu-west-1b", "eu-west-1c"]`
 
 - **Cross-account ECR pull from `fromRegistry` triggers a CDK warning** — `ContainerImage.fromRegistry(ecrUri)` on a cross-account ECR URI produces `[Warning] Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'`. This is expected: `fromEcrRepository` only works for same-account repos. The explicit IAM statements on the execution role (plus the repo resource policy in SharedServicesStack) provide the correct cross-account access. The warning is harmless.
+
+- **Every Lambda/log-producing resource must set an explicit CloudWatch Logs retention (D-093)** — the CDK default when no `logGroup`/`logRetention` is configured is "Never Expire" (unbounded storage growth). `ApiFn` and `SummarizationFn` pass an explicit `logGroup: new logs.LogGroup(...)` built via `logRetentionFor(props.workloadEnv)` (`lib/config.ts`); `TranscriptionStack`'s `TranscriptionLogGroup` does the same. Any new Lambda/ECS task added to this repo must follow the same pattern — don't let CDK auto-create the log group.
