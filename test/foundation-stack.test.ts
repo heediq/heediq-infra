@@ -238,6 +238,14 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
+  it('User Pool client registers the settings link-callback URL (D-083)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: Match.arrayWith([
+        Match.stringLikeRegexp('/settings/link-callback$'),
+      ]),
+    });
+  });
+
   it('User Pool client has no secret (public browser client)', () => {
     template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       GenerateSecret: false,

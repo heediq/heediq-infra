@@ -442,7 +442,10 @@ export class FoundationStack extends cdk.Stack {
         scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE, cognito.OAuthScope.OPENID],
         callbackUrls: [
           `https://${webDomain}/auth/callback`,
-          ...(props.workloadEnv === 'dev' ? ['http://localhost:5173/auth/callback'] : []),
+          `https://${webDomain}/settings/link-callback`,
+          ...(props.workloadEnv === 'dev'
+            ? ['http://localhost:5173/auth/callback', 'http://localhost:5173/settings/link-callback']
+            : []),
         ],
         logoutUrls: [
           `https://${webDomain}`,
