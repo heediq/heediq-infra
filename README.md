@@ -883,13 +883,7 @@ bash scripts/setup-budgets.sh
 
 ## Gotchas
 
-- **CloudFront ACM cert must be in `us-east-1`** (D-053) — CloudFront only trusts certificates from that region, regardless of where the distribution is. CDK handles this via a cross-region stack.
-
-- **S3 bucket names append `${Aws.ACCOUNT_ID}`** — S3 namespace is globally unique across all AWS accounts so D-037's no-prefix rule can't apply. App repos always read the bucket name from SSM; never hardcode it.
-
 - **OIDC trust policy `sub` must be a wildcard** — use `repo:heediq/heediq-infra:*` with `StringLike`. Locking to a branch (`ref:refs/heads/develop`) blocks PRs and feature-branch synths. Re-run `scripts/setup.sh` if the trust policy drifts (idempotent).
-
-- **Cognito OIDC IdPs validate the issuer URL at deploy time** — CloudFormation calls `{issuerUrl}/.well-known/openid-configuration` when creating `AWS::Cognito::UserPoolIdentityProvider`. Placeholder tenant IDs (e.g. `placeholder` in a Microsoft URL) cause deploy failure. Use `https://login.microsoftonline.com/organizations/v2.0` as the placeholder until a real Azure tenant is registered.
 
 - **Cross-account email sending via role assumption** (D-058) — SES identity lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. Do NOT create SES identities in workload accounts — DKIM CNAMEs would require a cross-account Route 53 update, creating a dependency from shared-services on environment stacks.
 
