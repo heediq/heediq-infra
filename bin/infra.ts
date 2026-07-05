@@ -10,6 +10,7 @@ import { WebStack } from '../lib/web/web-stack';
 import { TranscriptionStack } from '../lib/transcription/transcription-stack';
 import { SummarizationStack } from '../lib/summarization/summarization-stack';
 import { WebSocketStack } from '../lib/websocket/websocket-stack';
+import { ObservabilityStack } from '../lib/observability/observability-stack';
 
 const app = new cdk.App();
 const targetEnv = app.node.tryGetContext('env') as WorkloadEnv | 'shared' | undefined;
@@ -93,5 +94,13 @@ if (targetEnv === 'shared') {
     crossRegionReferences: true, // receives cfCert prop from us-east-1 WorkloadCfCertStack
     foundation,
     cfCert: workloadCfCertStack.cfCert,
+  });
+
+  // D-085: reads other stacks' resources by well-known name (D-037) — no construct props,
+  // so it can deploy/redeploy independently of every other stack's synth order.
+  new ObservabilityStack(app, 'HeediqObservabilityStack', {
+    env,
+    workloadEnv,
+    terminationProtection,
   });
 }

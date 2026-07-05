@@ -32,6 +32,7 @@ export class ApiStack extends cdk.Stack {
       ),
       memorySize: COMPUTE.lambda.api.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.api.timeoutSecs),
+      tracing: lambda.Tracing.ACTIVE, // D-085 — X-Ray active tracing, no separate observability tool
       environment: {
         SOURCES_TABLE_NAME:        props.foundation.sourcesTable.tableName,
         ORGS_TABLE_NAME:           props.foundation.orgsTable.tableName,

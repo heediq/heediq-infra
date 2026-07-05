@@ -55,6 +55,7 @@ export class SummarizationStack extends cdk.Stack {
       ),
       memorySize: COMPUTE.lambda.summarization.memoryMB,
       timeout: cdk.Duration.seconds(COMPUTE.lambda.summarization.timeoutSecs),
+      tracing: lambda.Tracing.ACTIVE, // D-085 — X-Ray active tracing, no separate observability tool
       environment: {
         JOBS_TABLE_NAME:       foundation.jobsTable.tableName,
         SOURCES_TABLE_NAME: foundation.sourcesTable.tableName,
