@@ -386,6 +386,8 @@ Replace placeholders with real credentials from Google Cloud Console and Azure p
 
 **Note on Microsoft issuer URL:** `organizations` is the correct placeholder — it's a real Microsoft OIDC discovery endpoint Cognito can reach at deploy time. Using `placeholder` as the tenant ID causes a deploy failure. When setting up the Azure app registration, update this to the specific tenant URL: `https://login.microsoftonline.com/{tenant-id}/v2.0`.
 
+**Note on OTP/confirmation-code email delivery (D-095):** the User Pool's `email:` config points at a same-account `heediq.com` SES identity (`CognitoSesEmailIdentity`), not Cognito's default mailer — see the SES gotcha under [Gotchas](#gotchas) and Step 3.5 in [Setting up a new environment from scratch](#setting-up-a-new-environment-from-scratch) for the one-time DKIM CNAME step.
+
 ### FoundationStack Cognito triggers (D-087)
 
 3 Lambda triggers wired on the User Pool, real code deployed by `heediq-api` CI (placeholder inline code in the stack, same pattern as `auth-provision.ts`/PreTokenGeneration):
@@ -622,7 +624,8 @@ IAM role **`heediq-route53-dns-manager`** in shared-services account (`313828097
 
 This role is used for:
 1. **ACM cert validation CNAMEs** — **manual, one-time per cert** (described above)
-2. **A-alias records** (`ws-{env}`, `api-{env}`, `dev/staging/heediq.com`) — **automated** by `Route53AliasRecord` on each stack deploy
+2. **Cognito SES DKIM CNAMEs** (D-095) — **manual, one-time per environment** (see Step 3.5 above)
+3. **A-alias records** (`ws-{env}`, `api-{env}`, `dev/staging/heediq.com`) — **automated** by `Route53AliasRecord` on each stack deploy
 
 ### DNS record status (dev)
 
@@ -756,6 +759,20 @@ aws route53 change-resource-record-sets \
 ```
 
 The cert validates in ~5–10 minutes. CDK's CloudFormation wait will unblock automatically. This CNAME is permanent and idempotent — the `UPSERT` action is safe to run again.
+
+### Step 3.5 — Add the Cognito SES DKIM CNAMEs to Route 53 ⚠️ (manual, one-time, D-095)
+
+FoundationStack also creates a same-account SES identity for `heediq.com` (`CognitoSesEmailIdentity`) so Cognito can send its own OTP/confirmation-code emails (D-087) via real SES instead of its default mailer. Like the ACM cert, DKIM validation needs 3 CNAMEs in the shared-services Route 53 zone — read the values straight from the stack outputs and add them the same way as Step 3:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name HeediqFoundationStack \
+  --profile heediq-staging \
+  --query "Stacks[0].Outputs[?starts_with(OutputKey, 'CognitoSesDkimCname')].OutputValue" \
+  --output text
+```
+
+Each line is `<name> CNAME <value>`. Add all 3 to Route 53 in shared-services (same pattern as Step 3c, one `change-resource-record-sets` call per CNAME, `Type: CNAME`, `UPSERT`). DKIM verifies in a few minutes; until it does, the SES identity stays `PENDING` and Cognito falls back to its default mailer (no hard failure, just degraded deliverability) — so this step isn't strictly blocking for `cdk deploy` to succeed, but OTP emails won't reliably reach real inboxes until it's done.
 
 > **Why this is manual:** ACM issues a unique validation CNAME per cert request. Two certs for `*.heediq.com` (one in dev, one in staging) get different CNAMEs. Since Route 53 is in the shared-services account, the workload CDK deploy can't add records there directly — the Route53AliasRecord custom resource handles regular A-alias records via cross-account role assumption, but cert CNAME addition has not been automated. It is a one-time step per new environment. If FoundationStack is ever destroyed and recreated, a new cert with a new CNAME is issued — repeat this step.
 
@@ -912,7 +929,9 @@ bash scripts/setup-budgets.sh
 
 - **OIDC trust policy `sub` must be a wildcard** — use `repo:heediq/heediq-infra:*` with `StringLike`. Locking to a branch (`ref:refs/heads/develop`) blocks PRs and feature-branch synths. Re-run `scripts/setup.sh` if the trust policy drifts (idempotent).
 
-- **Cross-account email sending via role assumption** (D-058) — SES identity lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. Do NOT create SES identities in workload accounts — DKIM CNAMEs would require a cross-account Route 53 update, creating a dependency from shared-services on environment stacks.
+- **Cross-account email sending via role assumption for app-initiated email** (D-058) — SES identity for outbound app email lives in shared-services account. Workload Lambdas assume `arn:aws:iam::313828097088:role/heediq-ses-email-sending` (stored in SSM `/heediq/api/ses-sending-role-arn`) and call SES in `eu-west-1` using those credentials. This is still the only path for Lambda-initiated transactional email — don't add a second one.
+
+- **Cognito's own OTP email is the one narrow exception** (D-095, supersedes D-058's workload-account restriction for this case only) — Cognito's built-in `SignUp`/`ConfirmSignUp` email cannot use a cross-account SES identity at all (AWS hard requirement: same account as the User Pool). `FoundationStack` therefore creates its own per-account `heediq.com` SES identity (`CognitoSesEmailIdentity`) solely for Cognito's `email:` config — this does not change how any other app email is sent. DKIM CNAMEs for it need the same manual one-time Route 53 step as the ACM cert (see [Setting up a new environment from scratch, Step 3.5](#step-35--add-the-cognito-ses-dkim-cnames-to-route-53-️-manual-one-time-d-095)).
 
 - **Security group `description` must be ASCII only** — AWS EC2 rejects non-ASCII characters (e.g. em dashes `—`) in `GroupDescription` with a 400 error at deploy time. Use plain hyphens `-` in all security group descriptions.
 
