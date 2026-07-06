@@ -7,6 +7,7 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ses from 'aws-cdk-lib/aws-ses';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { WorkloadEnv, DOMAINS, ACCOUNTS, COMPUTE } from '../config';
@@ -283,6 +284,28 @@ export class FoundationStack extends cdk.Stack {
     this.orgsTable.grantReadWriteData(authProvisionFn);
     this.usersTable.grantReadWriteData(authProvisionFn);
 
+    // ── SES — heediq.com identity for Cognito's own OTP/confirmation emails (D-095) ──
+    // Cognito's custom-SES email config requires the identity in the SAME account as the
+    // User Pool — cross-account SES (the D-058 pattern used for app-initiated Lambda email)
+    // is not supported by Cognito itself. This identity exists solely so Cognito can send its
+    // native SignUp/ConfirmSignUp codes (D-087) via real SES instead of its default mailer.
+    // ON FIRST DEPLOY for each new environment, the 3 DKIM CNAMEs (below, in stack outputs)
+    // must be manually added to Route 53 in the shared-services account — same one-time,
+    // per-environment manual step as the ACM wildcard cert above (D-063).
+    const sesIdentity = new ses.CfnEmailIdentity(this, 'CognitoSesEmailIdentity', {
+      emailIdentity: DOMAINS.root,
+      dkimAttributes: { signingEnabled: true },
+    });
+
+    for (let i = 1; i <= 3; i++) {
+      const name = (sesIdentity as unknown as Record<string, string>)[`attrDkimDnsTokenName${i}`];
+      const value = (sesIdentity as unknown as Record<string, string>)[`attrDkimDnsTokenValue${i}`];
+      new cdk.CfnOutput(this, `CognitoSesDkimCname${i}`, {
+        value: `${name} CNAME ${value}`,
+        description: `DKIM CNAME ${i}/3 for the Cognito SES identity — add to shared-services Route 53 on first deploy`,
+      });
+    }
+
     // ── Cognito User Pool (D-020) ─────────────────────────────────────────────
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
@@ -290,6 +313,11 @@ export class FoundationStack extends cdk.Stack {
       signInAliases: { email: true },
       autoVerify: { email: true },
       selfSignUpEnabled: true,
+      email: cognito.UserPoolEmail.withSES({
+        fromEmail: `noreply@${DOMAINS.root}`,
+        fromName: 'Heediq',
+        sesVerifiedDomain: DOMAINS.root,
+      }),
       passwordPolicy: {
         minLength: 8,
         requireUppercase: true,
@@ -309,6 +337,7 @@ export class FoundationStack extends cdk.Stack {
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy,
     });
+    this.userPool.node.addDependency(sesIdentity);
 
     // Hosted domain for OAuth redirects. Custom auth.heediq.com deferred (extra cert + DNS).
     const userPoolDomain = this.userPool.addDomain('UserPoolDomain', {

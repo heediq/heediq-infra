@@ -214,6 +214,26 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
+  // Regression for OTP non-delivery: with no `email:` config, Cognito silently falls back to
+  // its own default mailer instead of SES — confirmation codes were never actually reaching
+  // real inboxes reliably. The User Pool must declare EmailConfiguration with SES as the
+  // source, not leave it unset (D-095).
+  it('wires the User Pool to send email via SES, not Cognito\'s default mailer (D-095)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      EmailConfiguration: Match.objectLike({
+        EmailSendingAccount: 'DEVELOPER',
+        From: Match.stringLikeRegexp(`^Heediq <noreply@heediq\\.com>$`),
+      }),
+    });
+  });
+
+  it('creates a same-account SES identity for heediq.com with DKIM signing (D-095)', () => {
+    template.hasResourceProperties('AWS::SES::EmailIdentity', {
+      EmailIdentity: 'heediq.com',
+      DkimAttributes: { SigningEnabled: true },
+    });
+  });
+
   it('creates Cognito hosted domain with env prefix', () => {
     template.hasResourceProperties('AWS::Cognito::UserPoolDomain', {
       Domain: 'heediq-dev',
