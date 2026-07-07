@@ -112,13 +112,16 @@ export class ApiStack extends cdk.Stack {
     // reusing Cognito's own verification-code delivery instead of custom OTP+SES). ListUsers
     // resolves the existing federated identity to link; AdminSetUserPassword/
     // AdminLinkProviderForUser attach the password and link the provider — never create a new
-    // Cognito user themselves (SignUp does that part). Scoped to this pool's ARN only.
+    // Cognito user themselves (SignUp does that part). AdminDeleteUser (D-096) removes a native
+    // user stuck CONFIRMED-but-never-linked (abandoned between the code and password screens),
+    // so request-otp can self-heal by re-running SignUp. Scoped to this pool's ARN only.
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'cognito-idp:AdminGetUser',
           'cognito-idp:AdminSetUserPassword',
           'cognito-idp:AdminLinkProviderForUser',
+          'cognito-idp:AdminDeleteUser',
           'cognito-idp:SignUp',
           'cognito-idp:ConfirmSignUp',
           'cognito-idp:ResendConfirmationCode',
