@@ -33,8 +33,8 @@ describe('FoundationStack (dev)', () => {
 
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
-  it('creates 7 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+  it('creates 8 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 8);
   });
 
   it('all tables use PAY_PER_REQUEST', () => {
@@ -43,12 +43,14 @@ describe('FoundationStack (dev)', () => {
     });
   });
 
-  it('all non-ws-connections tables have PITR enabled', () => {
+  it('all non-ws-connections, non-rate-limits tables have PITR enabled', () => {
     // ws-connections is ephemeral (TTL-managed) — PITR not required
+    // rate-limits (D-097) is a transient fixed-window counter — PITR not required
     const tables = template.findResources('AWS::DynamoDB::Table');
     for (const [, resource] of Object.entries(tables)) {
       const props = (resource as { Properties: Record<string, unknown> }).Properties;
       if (props['TableName'] === 'heediq-ws-connections') continue;
+      if (props['TableName'] === 'heediq-rate-limits') continue;
       const pitr = props['PointInTimeRecoverySpecification'] as { PointInTimeRecoveryEnabled?: boolean } | undefined;
       if (!pitr?.PointInTimeRecoveryEnabled) {
         throw new Error(`Table ${String(props['TableName'])} is missing PITR`);
