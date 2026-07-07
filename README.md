@@ -168,7 +168,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 
 - **SSM param convention**: `/heediq/{service}/{param}` — no environment prefix (D-038)
 - **Resource naming**: `heediq-{entity}` — no environment prefix (D-037). **Exception:** S3 bucket names are globally unique, so buckets append the account ID: `heediq-audio-uploads-{accountId}`. App repos always resolve bucket names via SSM, never hardcode them.
-- **Secrets**: never in code or env files; fetched at Lambda cold start via Lambda Extension (D-038)
+- **Secrets**: never in code or env files; fetched at Lambda cold start via a direct Secrets Manager SDK call, cached at module scope (D-100, narrows D-038)
 - **DynamoDB**: `PAY_PER_REQUEST` in all environments (D-055)
 - **Compute sizing**: see `lib/config.ts` → `COMPUTE` (D-055)
 
@@ -261,7 +261,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 - Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: sourceId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-sources[sourceId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `sourceId`
 - Direct path: API Lambda → enqueues `{ sourceType: 'text', contentRef: sourceId, tier }` for direct non-audio uploads (D-026). Note: `SourceType` in `@heediq/shared` currently only supports `'audio' | 'text'`; pdf/email/Excel support is planned but not yet in the schema.
 
-**Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/summarization/anthropic-api-key` — Anthropic API key; fetched by the Lambda at cold start via the Parameters and Secrets Lambda Extension (D-038). Must exist before the first `heediq-worker-summarization` Lambda invocation.
+**Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/summarization/anthropic-api-key` — Anthropic API key; fetched by the Lambda at cold start via a direct Secrets Manager SDK call, cached at module scope (D-100). Must exist before the first `heediq-worker-summarization` Lambda invocation.
 
 **Cross-stack IAM (no CDK dependency required):** `heediq-summarization` queue ARN is deterministic (`arn:aws:sqs:{region}:{account}:heediq-summarization`) — TranscriptionStack task role and ApiStack Lambda role each receive `sqs:SendMessage` using the constructed ARN. Both also receive `SUMMARIZATION_QUEUE_URL` as an env var.
 
@@ -433,7 +433,7 @@ aws secretsmanager create-secret \
   --profile heediq-dev
 ```
 
-Replace `placeholder` with the real Anthropic API key from the Anthropic console (D-032). The Lambda Extension reads this at cold-start; rotating the secret value takes effect on the next cold-start.
+Replace `placeholder` with the real Anthropic API key from the Anthropic console (D-032). The Lambda's `config.ts` fetches this via a direct Secrets Manager SDK call at cold start, cached at module scope (D-100); rotating the secret value takes effect on the next cold-start.
 
 ### TranscriptionStack — SSM image-tag params prerequisite before first deploy
 

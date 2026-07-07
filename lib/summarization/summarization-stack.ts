@@ -99,7 +99,7 @@ export class SummarizationStack extends cdk.Stack {
     // directly (text files, PDFs, emails, Excel — D-065, D-026)
     foundation.audioUploadsBucket.grantRead(summarizationFn);
 
-    // Secrets Manager — Claude API key fetched at cold start via Lambda Extension (D-038)
+    // Secrets Manager — Claude API key fetched at cold start via direct SDK call, cached at module scope (D-100)
     summarizationFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue'],
