@@ -4,6 +4,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES, COMPUTE, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
@@ -51,6 +52,7 @@ export class ApiStack extends cdk.Stack {
         WS_CONNECTIONS_TABLE_NAME: props.foundation.wsConnectionsTable.tableName,
         USER_AUTH_METHODS_TABLE_NAME: props.foundation.userAuthMethodsTable.tableName,
         AUTH_AUDIT_LOG_TABLE_NAME:    props.foundation.authAuditLogTable.tableName,
+        RATE_LIMITS_TABLE_NAME:    props.foundation.rateLimitsTable.tableName,
         AUDIO_BUCKET_NAME:         props.foundation.audioUploadsBucket.bucketName,
         TRANSCRIPTION_QUEUE_URL:   props.foundation.transcriptionQueue.queueUrl,
         COGNITO_USER_POOL_ID:      props.foundation.userPool.userPoolId,
@@ -69,6 +71,7 @@ export class ApiStack extends cdk.Stack {
     props.foundation.wsConnectionsTable.grantReadData(apiFn);
     props.foundation.userAuthMethodsTable.grantReadWriteData(apiFn);
     props.foundation.authAuditLogTable.grantWriteData(apiFn);
+    props.foundation.rateLimitsTable.grantReadWriteData(apiFn);
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);
@@ -174,11 +177,63 @@ export class ApiStack extends cdk.Stack {
       target: `integrations/${integration.ref}`,
     });
 
+    // Stage-level throttling (D-097) — the whole API is one catch-all proxy route, so this
+    // applies globally rather than per logical endpoint; still stops raw request floods
+    // before Lambda even runs. Cheap (no extra charge), so on in every environment.
     const stage = new apigatewayv2.CfnStage(this, 'Stage', {
       apiId: httpApi.ref,
       stageName: '$default',
       autoDeploy: true,
+      defaultRouteSettings: {
+        throttlingBurstLimit: 50,
+        throttlingRateLimit: 20,
+      },
     });
+
+    // ── WAF rate-based rule (D-097, deferred activation per D-098) ────────────
+    // Written now so enabling it later is a one-line config flip, not new code, but not
+    // deployed active anywhere yet — WAF carries a real fixed monthly cost that isn't
+    // justified before there's meaningful unauthenticated traffic to defend against.
+    // Flip ENABLE_WAF[workloadEnv] to true (prod only, per D-097) before a marketing push.
+    const ENABLE_WAF: Record<WorkloadEnv, boolean> = {
+      dev: false,
+      staging: false,
+      prod: false,
+    };
+    if (ENABLE_WAF[props.workloadEnv]) {
+      const rateLimitWebAcl = new wafv2.CfnWebACL(this, 'ApiRateLimitWebAcl', {
+        scope: 'REGIONAL',
+        defaultAction: { allow: {} },
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          metricName: 'heediq-api-rate-limit',
+          sampledRequestsEnabled: true,
+        },
+        rules: [
+          {
+            name: 'RateLimitPerIp',
+            priority: 0,
+            action: { block: {} },
+            statement: {
+              rateBasedStatement: {
+                limit: 500, // requests per 5-minute window per IP
+                aggregateKeyType: 'IP',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'heediq-api-rate-limit-per-ip',
+              sampledRequestsEnabled: true,
+            },
+          },
+        ],
+      });
+
+      new wafv2.CfnWebACLAssociation(this, 'ApiRateLimitWebAclAssociation', {
+        resourceArn: `arn:aws:apigateway:${this.region}::/apis/${httpApi.ref}/stages/${stage.ref}`,
+        webAclArn: rateLimitWebAcl.attrArn,
+      });
+    }
 
     // ── Custom domain (D-052, D-053, D-063) ──────────────────────────────────
     // Cert comes from FoundationStack.wildcardCert — same workload account, same region.

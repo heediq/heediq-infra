@@ -30,6 +30,7 @@ export class FoundationStack extends cdk.Stack {
   readonly wsConnectionsTable: dynamodb.Table;
   readonly userAuthMethodsTable: dynamodb.Table;
   readonly authAuditLogTable: dynamodb.Table;
+  readonly rateLimitsTable: dynamodb.Table;
 
   // S3
   readonly audioUploadsBucket: s3.Bucket;
@@ -146,6 +147,18 @@ export class FoundationStack extends cdk.Stack {
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+
+    // App-level OTP abuse throttling (D-097). PK = `<ROUTE>#<KEYTYPE>#<KEYVALUE>#<bucketStart>` —
+    // the fixed-window bucket boundary lives in the key itself, not in TTL, because DynamoDB TTL
+    // deletion isn't timed/guaranteed (can lag hours) so it can't be relied on to enforce a window
+    // reset. TTL here is storage cleanup only. No point-in-time recovery — pure ephemeral counters.
+    this.rateLimitsTable = new dynamodb.Table(this, 'RateLimitsTable', {
+      tableName: 'heediq-rate-limits',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
       removalPolicy,
     });
 
