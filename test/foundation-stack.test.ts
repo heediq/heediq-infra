@@ -33,8 +33,15 @@ describe('FoundationStack (dev)', () => {
 
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
-  it('creates 8 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 8);
+  it('creates 9 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 9);
+  });
+
+  it('creates the cognito-identities table keyed by sub (D-099)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-cognito-identities',
+      KeySchema: [{ AttributeName: 'sub', KeyType: 'HASH' }],
+    });
   });
 
   it('all tables use PAY_PER_REQUEST', () => {

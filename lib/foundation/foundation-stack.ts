@@ -31,6 +31,7 @@ export class FoundationStack extends cdk.Stack {
   readonly userAuthMethodsTable: dynamodb.Table;
   readonly authAuditLogTable: dynamodb.Table;
   readonly rateLimitsTable: dynamodb.Table;
+  readonly cognitoIdentitiesTable: dynamodb.Table;
 
   // S3
   readonly audioUploadsBucket: s3.Bucket;
@@ -127,6 +128,20 @@ export class FoundationStack extends cdk.Stack {
     this.usersTable.addGlobalSecondaryIndex({
       indexName: 'by-email',
       partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Cognito sub -> Heediq accountId mapping (D-099). The stable identity anchor: every
+    // Cognito identity (native or federated) a person has ever signed in with maps onto one
+    // `accountId`, created once at first login and never rewritten. Replaces the old
+    // by-email-GSI-guess used to reconcile a JWT's `sub` with a DynamoDB user row, which
+    // diverged permanently whenever AdminLinkProviderForUser repointed a federated login's
+    // future `sub` to a different destination user than the row the guess picked.
+    this.cognitoIdentitiesTable = new dynamodb.Table(this, 'CognitoIdentitiesTable', {
+      tableName: 'heediq-cognito-identities',
+      partitionKey: { name: 'sub', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
     });
 
     // Auth methods-per-account + audit trail for cross-provider linking (D-087, replicating
@@ -292,10 +307,16 @@ export class FoundationStack extends cdk.Stack {
       environment: {
         ORGS_TABLE_NAME: this.orgsTable.tableName,
         USERS_TABLE_NAME: this.usersTable.tableName,
+        COGNITO_IDENTITIES_TABLE_NAME: this.cognitoIdentitiesTable.tableName,
+        USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
+        AUTH_AUDIT_LOG_TABLE_NAME: this.authAuditLogTable.tableName,
       },
     });
     this.orgsTable.grantReadWriteData(authProvisionFn);
     this.usersTable.grantReadWriteData(authProvisionFn);
+    this.cognitoIdentitiesTable.grantReadWriteData(authProvisionFn);
+    this.userAuthMethodsTable.grantReadWriteData(authProvisionFn);
+    this.authAuditLogTable.grantWriteData(authProvisionFn);
 
     // ── SES — heediq.com identity for Cognito's own OTP/confirmation emails (D-095) ──
     // Cognito's custom-SES email config requires the identity in the SAME account as the
@@ -338,11 +359,15 @@ export class FoundationStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: true,
       },
-      // custom:orgId / custom:role are set only by AuthProvisionFn (D-077), never by the
-      // user or client directly — mutable so the trigger can update them post-creation.
+      // custom:orgId / custom:role / custom:accountId are set only by AuthProvisionFn
+      // (D-077, D-099), never by the user or client directly — mutable so the trigger can
+      // update them post-creation. custom:accountId is the stable, app-owned identity
+      // anchor (D-099): decoupled from Cognito's `sub`, which can be repointed by
+      // AdminLinkProviderForUser during account linking.
       customAttributes: {
         orgId: new cognito.StringAttribute({ mutable: true }),
         role: new cognito.StringAttribute({ mutable: true }),
+        accountId: new cognito.StringAttribute({ mutable: true }),
       },
       lambdaTriggers: {
         preTokenGeneration: authProvisionFn,
@@ -376,6 +401,7 @@ export class FoundationStack extends cdk.Stack {
       environment: {
         USERS_TABLE_NAME: this.usersTable.tableName,
         USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
+        COGNITO_IDENTITIES_TABLE_NAME: this.cognitoIdentitiesTable.tableName,
       },
     });
 
@@ -390,6 +416,7 @@ export class FoundationStack extends cdk.Stack {
         USERS_TABLE_NAME: this.usersTable.tableName,
         USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
         AUTH_AUDIT_LOG_TABLE_NAME: this.authAuditLogTable.tableName,
+        COGNITO_IDENTITIES_TABLE_NAME: this.cognitoIdentitiesTable.tableName,
       },
     });
 
@@ -404,12 +431,14 @@ export class FoundationStack extends cdk.Stack {
         USERS_TABLE_NAME: this.usersTable.tableName,
         USER_AUTH_METHODS_TABLE_NAME: this.userAuthMethodsTable.tableName,
         AUTH_AUDIT_LOG_TABLE_NAME: this.authAuditLogTable.tableName,
+        COGNITO_IDENTITIES_TABLE_NAME: this.cognitoIdentitiesTable.tableName,
       },
     });
 
     for (const fn of [authTriggerPreSignUpFn, authTriggerPostConfirmationFn, authTriggerPostAuthenticationFn]) {
       this.usersTable.grantReadData(fn);
       this.userAuthMethodsTable.grantReadWriteData(fn);
+      this.cognitoIdentitiesTable.grantReadWriteData(fn);
     }
     this.authAuditLogTable.grantWriteData(authTriggerPostConfirmationFn);
     this.authAuditLogTable.grantWriteData(authTriggerPostAuthenticationFn);

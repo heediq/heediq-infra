@@ -53,6 +53,7 @@ export class ApiStack extends cdk.Stack {
         USER_AUTH_METHODS_TABLE_NAME: props.foundation.userAuthMethodsTable.tableName,
         AUTH_AUDIT_LOG_TABLE_NAME:    props.foundation.authAuditLogTable.tableName,
         RATE_LIMITS_TABLE_NAME:    props.foundation.rateLimitsTable.tableName,
+        COGNITO_IDENTITIES_TABLE_NAME: props.foundation.cognitoIdentitiesTable.tableName,
         AUDIO_BUCKET_NAME:         props.foundation.audioUploadsBucket.bucketName,
         TRANSCRIPTION_QUEUE_URL:   props.foundation.transcriptionQueue.queueUrl,
         COGNITO_USER_POOL_ID:      props.foundation.userPool.userPoolId,
@@ -72,6 +73,7 @@ export class ApiStack extends cdk.Stack {
     props.foundation.userAuthMethodsTable.grantReadWriteData(apiFn);
     props.foundation.authAuditLogTable.grantWriteData(apiFn);
     props.foundation.rateLimitsTable.grantReadWriteData(apiFn);
+    props.foundation.cognitoIdentitiesTable.grantReadWriteData(apiFn);
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);
