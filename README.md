@@ -278,9 +278,10 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | Resource | Details |
 |---|---|
 | API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-api` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
-| HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). |
+| HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). Stage-level default throttling (burst 50 / rate 20 req/s) in every environment (D-097) — applies globally since the API is one catch-all route. |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087), **rate-limits** (D-097); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| WAF (scaffolded, off by default) | Regional `CfnWebACL` rate-based rule (500 req/5min per IP, `aggregateKeyType: IP`) + `CfnWebACLAssociation` to the HTTP API stage — code-gated behind a per-env `ENABLE_WAF` flag defaulting to `false` in dev/staging/prod. Deliberately not deployed active anywhere yet; flip the flag before a marketing campaign or expected traffic spike (D-098) rather than building it from scratch then. |
 
 **SSM params (ApiStack):**
 
@@ -358,12 +359,15 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-ws-connections` | `connectionId` | — | `by-source` (PK=`sourceId`), TTL on `expiresAt` | — |
 | `heediq-user-auth-methods` | `pk` | `sk` | — | — |
 | `heediq-auth-audit-log` | `pk` | `sk` | — | — |
+| `heediq-rate-limits` | `pk` | — | — | TTL on `expiresAt` (cleanup only, not correctness) |
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
 
 `heediq-users.by-email` (PK=`email`) backs the email-as-identity lookup for cross-provider account linking (D-078) — the writer lowercases/trims email before every put; the table itself does no normalization.
 
 `heediq-user-auth-methods`/`heediq-auth-audit-log` (D-087) share one key shape: `pk = USER#<canonicalAccountId>`; `sk = METHOD#<PROVIDER>` (one idempotent row per linked sign-in method, conditional put on `attribute_not_exists`) in the methods table, `sk = EVENT#<isoTimestamp>` (append-only) in the audit table.
+
+`heediq-rate-limits` (D-097) backs `heediq-api`'s app-level OTP abuse limiter: `pk = <ROUTE>#<EMAIL|IP>#<keyValue>#<bucketStart>`, an atomic `ADD` counter per fixed window. No SK, no GSIs — every lookup is a direct key match on the already-computed window boundary.
 
 ### FoundationStack Cognito — prerequisite before first deploy
 
