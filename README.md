@@ -360,10 +360,13 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-user-auth-methods` | `pk` | `sk` | — | — |
 | `heediq-auth-audit-log` | `pk` | `sk` | — | — |
 | `heediq-rate-limits` | `pk` | — | — | TTL on `expiresAt` (cleanup only, not correctness) |
+| `heediq-cognito-identities` | `sub` | — | — | — |
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
 
-`heediq-users.by-email` (PK=`email`) backs the email-as-identity lookup for cross-provider account linking (D-078) — the writer lowercases/trims email before every put; the table itself does no normalization.
+`heediq-cognito-identities` (D-099) was added alongside the `custom:accountId` Cognito attribute — see the FoundationStack Cognito triggers section below for its role and contract.
+
+`heediq-users.by-email` (PK=`email`) backs the email-as-identity lookup for cross-provider account linking (D-078) — the writer lowercases/trims email before every put; the table itself does no normalization. Since D-099 it is a fallback self-heal path, superseded as the primary lookup by `heediq-cognito-identities`.
 
 `heediq-user-auth-methods`/`heediq-auth-audit-log` (D-087) share one key shape: `pk = USER#<canonicalAccountId>`; `sk = METHOD#<PROVIDER>` (one idempotent row per linked sign-in method, conditional put on `attribute_not_exists`) in the methods table, `sk = EVENT#<isoTimestamp>` (append-only) in the audit table.
 
@@ -402,7 +405,20 @@ Replace placeholders with real credentials from Google Cloud Console and Azure p
 | `AuthTriggerPostConfirmationFn` (`POST_CONFIRMATION`) | `PostConfirmation_ConfirmSignUp` | Records the auth method (native `COGNITO` or federated provider) + an audit event; never writes the main `users` row |
 | `AuthTriggerPostAuthenticationFn` (`POST_AUTHENTICATION`) | `PostAuthentication_Authentication` | Records the auth method used for the completed login; auto-links a federated login to an existing native account with the same email if not yet linked |
 
-All three write to `heediq-user-auth-methods`/`heediq-auth-audit-log`; `AuthTriggerPreSignUpFn`/`AuthTriggerPostAuthenticationFn` additionally call Cognito Admin APIs (`AdminCreateUser`, `AdminLinkProviderForUser`, `ListUsers`). All three also receive `USERS_TABLE_NAME` (read-only `grantReadData`), since auto-linking needs to look up the existing native account by email.
+All three write to `heediq-user-auth-methods`/`heediq-auth-audit-log`; `AuthTriggerPreSignUpFn`/`AuthTriggerPostAuthenticationFn` additionally call Cognito Admin APIs (`AdminCreateUser`, `AdminLinkProviderForUser`, `ListUsers`). All three also receive `USERS_TABLE_NAME` (read-only `grantReadData`), since auto-linking needs to look up the existing native account by email, and `COGNITO_IDENTITIES_TABLE_NAME` (read-write `grantReadWriteData`) for the D-099 `heediq-cognito-identities` table.
+
+**D-099 — `custom:accountId` and `heediq-cognito-identities`:** the User Pool's `customAttributes`
+now include `accountId` (alongside `orgId`/`role`, all mutable, set only by `AuthProvisionFn`). A new
+DynamoDB table `CognitoIdentitiesTable` (`heediq-cognito-identities`, pk = `sub`, PAY_PER_REQUEST,
+PITR) maps every Cognito identity onto one app-owned `accountId`, replacing `sub` as the stable
+per-account key (see `heediq-api/README.md`'s D-099 contract note for the full rationale). All 4 auth
+Lambdas (the 3 triggers above + `AuthProvisionFn`) and the main API Lambda (`apiFn`, for
+`routes/auth.ts`'s `/link/confirm`) are granted `grantReadWriteData` on this table.
+
+**Gotcha — adding `custom:accountId` forces full User Pool replacement:** changing a Cognito User
+Pool's `Schema` (custom attributes) cannot be done in place — CloudFormation replaces the entire
+`AWS::Cognito::UserPool` resource, destroying every existing user in that environment. This is a
+one-time, deliberate, accepted cost for dev; get explicit sign-off before applying to staging/prod.
 
 **Gotcha — CDK circular dependency avoidance:** these trigger Lambdas' IAM policies cannot reference `this.userPool.userPoolArn` directly. The pool's `LambdaConfig` already depends on the Lambdas via `addTrigger`, so a policy referencing the pool's own live ARN creates a genuine CloudFormation cycle (`UserPool → Lambda → LambdaRolePolicy → UserPool`). Instead, scope the policy to an account/region ARN pattern built from CDK pseudo-parameters: `cdk.Stack.of(this).formatArn({ service: 'cognito-idp', resource: 'userpool', resourceName: '*' })`. This stays account/region-scoped (not a bare `*`) and is safe because each account has exactly one User Pool (D-037).
 
@@ -716,7 +732,7 @@ cd /path/to/heediq-infra
 pnpm run cdk deploy HeediqFoundationStack -c env=staging --profile heediq-staging
 ```
 
-This creates the 5 DynamoDB tables, S3 buckets, SQS queues, Cognito user pool, SSM params, and — critically — the **ACM wildcard cert** for `*.heediq.com` in eu-west-1. The cert enters `PENDING_VALIDATION` status and CDK waits.
+This creates the DynamoDB tables (see the FoundationStack DynamoDB key design table above for the current list), S3 buckets, SQS queues, Cognito user pool, SSM params, and — critically — the **ACM wildcard cert** for `*.heediq.com` in eu-west-1. The cert enters `PENDING_VALIDATION` status and CDK waits.
 
 ### Step 3 — Add the ACM cert validation CNAME to Route 53 ⚠️ (manual, one-time)
 
