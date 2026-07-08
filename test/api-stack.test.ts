@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from 'vitest';
+import { describe, it, beforeAll, expect } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { FoundationStack } from '../lib/foundation/foundation-stack';
@@ -24,6 +24,19 @@ function buildTemplates(workloadEnv: 'dev' | 'prod' = 'dev') {
     foundation: Template.fromStack(foundation),
     api: Template.fromStack(api),
   };
+}
+
+// The API Lambda's default inline role policy auto-splits into overflow
+// AWS::IAM::ManagedPolicy resources once it crosses CDK's inline-policy size
+// limit (aws-cdk-lib Role.splitLargePolicy, ~10,000 chars) — expected as more
+// grants are added, not a regression. Statement-level IAM assertions must
+// scan both resource types rather than assuming everything stays inline.
+function findAllIamStatements(template: Template): any[] {
+  const policies = template.findResources('AWS::IAM::Policy');
+  const managedPolicies = template.findResources('AWS::IAM::ManagedPolicy');
+  return [...Object.values(policies), ...Object.values(managedPolicies)].flatMap(
+    (res: any) => res.Properties?.PolicyDocument?.Statement ?? [],
+  );
 }
 
 describe('ApiStack (dev)', () => {
@@ -102,6 +115,10 @@ describe('ApiStack (dev)', () => {
           WS_CONNECTIONS_TABLE_NAME: Match.anyValue(),
           USER_AUTH_METHODS_TABLE_NAME: Match.anyValue(),
           AUTH_AUDIT_LOG_TABLE_NAME:    Match.anyValue(),
+          ROLES_TABLE_NAME:          Match.anyValue(),
+          GROUPS_TABLE_NAME:         Match.anyValue(),
+          ROLE_ASSIGNMENTS_TABLE_NAME: Match.anyValue(),
+          AUDIT_LOG_TABLE_NAME:      Match.anyValue(),
           AUDIO_BUCKET_NAME:         Match.anyValue(),
           TRANSCRIPTION_QUEUE_URL:   Match.anyValue(),
           COGNITO_USER_POOL_ID:      Match.anyValue(),
@@ -120,62 +137,75 @@ describe('ApiStack (dev)', () => {
 
   // ── IAM ───────────────────────────────────────────────────────────────────
 
-  it('API Lambda role has secretsmanager:GetSecretValue for /heediq/api/* secrets', () => {
-    api.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'secretsmanager:GetSecretValue',
-            Resource: Match.stringLikeRegexp('/heediq/api/'),
-          }),
-        ]),
-      }),
+  it('API Lambda role has read-write access to the RBAC roles/groups/role-assignments tables (D-102 Phase 2)', () => {
+    const statements = findAllIamStatements(api);
+    const rolesStatements = statements.filter((stmt: any) => {
+      const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
+      return resources.some((r: any) => JSON.stringify(r).includes('RolesTable'));
     });
+    const actions = rolesStatements.flatMap((stmt: any) =>
+      Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action],
+    );
+    expect(actions).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem/)]));
+  });
+
+  it('API Lambda role has write-only access to the audit-log table, no read (D-102 — enforces write-once at the IAM layer)', () => {
+    const statements = findAllIamStatements(api);
+    const auditLogStatements = statements.filter((stmt: any) => {
+      const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
+      return resources.some((r: any) => JSON.stringify(r).includes('AuditLogTable'));
+    });
+    const actions = auditLogStatements.flatMap((stmt: any) =>
+      Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action],
+    );
+    expect(actions).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:PutItem/)]));
+    expect(actions).not.toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem|dynamodb:Query|dynamodb:Scan/)]));
+  });
+
+  it('API Lambda role has secretsmanager:GetSecretValue for /heediq/api/* secrets', () => {
+    const statements = findAllIamStatements(api);
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        Action: 'secretsmanager:GetSecretValue',
+        Resource: expect.stringMatching(/\/heediq\/api\//),
+      }),
+    ]));
   });
 
   it('API Lambda role has sts:AssumeRole on heediq-ses-email-sending (D-058)', () => {
-    api.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'sts:AssumeRole',
-            Resource: 'arn:aws:iam::313828097088:role/heediq-ses-email-sending',
-          }),
-        ]),
+    const statements = findAllIamStatements(api);
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        Action: 'sts:AssumeRole',
+        Resource: 'arn:aws:iam::313828097088:role/heediq-ses-email-sending',
       }),
-    });
+    ]));
   });
 
   it('API Lambda role has sqs:SendMessage on heediq-summarization queue (D-065)', () => {
-    api.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'sqs:SendMessage',
-            Resource: Match.stringLikeRegexp('heediq-summarization'),
-          }),
-        ]),
+    const statements = findAllIamStatements(api);
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        Action: 'sqs:SendMessage',
+        Resource: expect.stringMatching(/heediq-summarization/),
       }),
-    });
+    ]));
   });
 
   it('API Lambda role has Cognito Admin + SignUp-flow actions scoped to the User Pool ARN (D-078, D-087)', () => {
-    api.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: Match.arrayWith([
-              'cognito-idp:AdminSetUserPassword',
-              'cognito-idp:AdminLinkProviderForUser',
-              'cognito-idp:SignUp',
-              'cognito-idp:ConfirmSignUp',
-              'cognito-idp:ResendConfirmationCode',
-              'cognito-idp:ListUsers',
-            ]),
-          }),
+    const statements = findAllIamStatements(api);
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        Action: expect.arrayContaining([
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminLinkProviderForUser',
+          'cognito-idp:SignUp',
+          'cognito-idp:ConfirmSignUp',
+          'cognito-idp:ResendConfirmationCode',
+          'cognito-idp:ListUsers',
         ]),
       }),
-    });
+    ]));
   });
 
   it('API Lambda environment includes SUMMARIZATION_QUEUE_URL (D-065)', () => {

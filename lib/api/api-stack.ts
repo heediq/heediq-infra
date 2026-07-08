@@ -54,6 +54,12 @@ export class ApiStack extends cdk.Stack {
         AUTH_AUDIT_LOG_TABLE_NAME:    props.foundation.authAuditLogTable.tableName,
         RATE_LIMITS_TABLE_NAME:    props.foundation.rateLimitsTable.tableName,
         COGNITO_IDENTITIES_TABLE_NAME: props.foundation.cognitoIdentitiesTable.tableName,
+        // RBAC & audit trail tables (D-102 Phase 2) — schema-only since Phase 1 (#48); this is
+        // their first real consumer.
+        ROLES_TABLE_NAME:          props.foundation.rolesTable.tableName,
+        GROUPS_TABLE_NAME:         props.foundation.groupsTable.tableName,
+        ROLE_ASSIGNMENTS_TABLE_NAME: props.foundation.roleAssignmentsTable.tableName,
+        AUDIT_LOG_TABLE_NAME:      props.foundation.auditLogTable.tableName,
         AUDIO_BUCKET_NAME:         props.foundation.audioUploadsBucket.bucketName,
         TRANSCRIPTION_QUEUE_URL:   props.foundation.transcriptionQueue.queueUrl,
         COGNITO_USER_POOL_ID:      props.foundation.userPool.userPoolId,
@@ -74,6 +80,13 @@ export class ApiStack extends cdk.Stack {
     props.foundation.authAuditLogTable.grantWriteData(apiFn);
     props.foundation.rateLimitsTable.grantReadWriteData(apiFn);
     props.foundation.cognitoIdentitiesTable.grantReadWriteData(apiFn);
+    // RBAC & audit trail (D-102 Phase 2) — roles/groups/role-assignments are read-write; the
+    // audit log is write-only, enforcing "no delete/update code path" (D-102) at the IAM layer
+    // too, not just convention (mirrors authAuditLogTable's write-only grant above).
+    props.foundation.rolesTable.grantReadWriteData(apiFn);
+    props.foundation.groupsTable.grantReadWriteData(apiFn);
+    props.foundation.roleAssignmentsTable.grantReadWriteData(apiFn);
+    props.foundation.auditLogTable.grantWriteData(apiFn);
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);
