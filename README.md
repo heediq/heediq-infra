@@ -14,7 +14,7 @@ resources themselves.
 - `bin/infra.ts` — CDK app entry; selects stacks by `-c env=<shared|dev|staging|prod>`
 - `lib/config.ts` — all locked constants (account IDs, region, domains, compute sizing) + `logRetentionFor(workloadEnv)` (D-093 — 30 days dev/staging, 90 days prod)
 - `lib/shared-services/shared-services-stack.ts` — ECR, Route 53, ACM certs, SES identity + DKIM, cross-account email role
-- `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
+- `lib/foundation/` — DynamoDB, S3, SQS, Cognito (per workload account); split by concern (D-103) — see `lib/foundation/README.md`
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
