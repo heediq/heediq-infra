@@ -14,7 +14,7 @@ resources themselves.
 - `bin/infra.ts` — CDK app entry; selects stacks by `-c env=<shared|dev|staging|prod>`
 - `lib/config.ts` — all locked constants (account IDs, region, domains, compute sizing) + `logRetentionFor(workloadEnv)` (D-093 — 30 days dev/staging, 90 days prod)
 - `lib/shared-services/shared-services-stack.ts` — ECR, Route 53, ACM certs, SES identity + DKIM, cross-account email role
-- `lib/foundation/foundation-stack.ts` — DynamoDB, S3, SQS, Cognito (per workload account)
+- `lib/foundation/` — DynamoDB, S3, SQS, Cognito (per workload account); split by concern (D-103) — see `lib/foundation/README.md`
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
@@ -361,8 +361,20 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-auth-audit-log` | `pk` | `sk` | — | — |
 | `heediq-rate-limits` | `pk` | — | — | TTL on `expiresAt` (cleanup only, not correctness) |
 | `heediq-cognito-identities` | `sub` | — | — | — |
+| `heediq-roles` | `pk` | `sk` | — | — |
+| `heediq-groups` | `pk` | `sk` | — | — |
+| `heediq-role-assignments` | `pk` | `sk` | `by-role` (PK=`roleId`, sparse) | — |
+| `heediq-audit-log` | `pk` | `sk` | `by-user` (PK=`actorUserId` SK=`sk`) | — |
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
+
+`heediq-roles`/`heediq-groups`/`heediq-role-assignments`/`heediq-audit-log` (D-102, Phase 1 — tables
+only, not yet consumed by any route) all key off `pk = ORG#<orgId>` for org-scoped isolation.
+`heediq-role-assignments` additionally keys `pk = ORG#<orgId>#USER#<userId>`, `sk = ROLE#<roleId> |
+GROUP#<groupId>` so a user's direct role/group assignments live together; its `by-role` GSI is sparse
+(only role-type rows carry `roleId`) so it naturally excludes group-type rows. `heediq-audit-log` is
+write-once by construction (`sk = <isoTimestamp>#<eventId>`, no update/delete code path); its
+`by-user` GSI serves "this user's actions" queries via `actorUserId`.
 
 `heediq-cognito-identities` (D-099) was added alongside the `custom:accountId` Cognito attribute — see the FoundationStack Cognito triggers section below for its role and contract.
 
