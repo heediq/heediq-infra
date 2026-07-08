@@ -33,8 +33,8 @@ describe('FoundationStack (dev)', () => {
 
   // ── DynamoDB ───────────────────────────────────────────────────────────────
 
-  it('creates 9 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 9);
+  it('creates 13 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 13);
   });
 
   it('creates the cognito-identities table keyed by sub (D-099)', () => {
@@ -145,6 +145,63 @@ describe('FoundationStack (dev)', () => {
         { AttributeName: 'pk', KeyType: 'HASH' },
         { AttributeName: 'sk', KeyType: 'RANGE' },
       ],
+    });
+  });
+
+  // ── RBAC & audit trail (D-102, Phase 1) ─────────────────────────────────────
+
+  it('roles table has pk/sk key schema', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-roles',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('groups table has pk/sk key schema', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-groups',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('role-assignments table has pk/sk key schema and a sparse by-role GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-role-assignments',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-role',
+          KeySchema: [{ AttributeName: 'roleId', KeyType: 'HASH' }],
+        }),
+      ]),
+    });
+  });
+
+  it('audit-log table has pk/sk key schema and a by-user GSI', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-audit-log',
+      KeySchema: [
+        { AttributeName: 'pk', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-user',
+          KeySchema: [
+            { AttributeName: 'actorUserId', KeyType: 'HASH' },
+            { AttributeName: 'sk', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
     });
   });
 
@@ -370,7 +427,7 @@ describe('FoundationStack (dev)', () => {
 
   // ── SSM params ─────────────────────────────────────────────────────────────
 
-  it('exports all 15 required SSM parameters', () => {
+  it('exports all 19 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/infra/cert-arn-eu-west-1',
       '/heediq/api/sources-table-name',
@@ -387,6 +444,10 @@ describe('FoundationStack (dev)', () => {
       '/heediq/api/cognito-hosted-ui-domain',
       '/heediq/api/ses-sending-role-arn',
       '/heediq/api/ws-connections-table-name',
+      '/heediq/api/roles-table-name',
+      '/heediq/api/groups-table-name',
+      '/heediq/api/role-assignments-table-name',
+      '/heediq/api/audit-log-table-name',
     ];
     for (const name of expectedParams) {
       template.hasResourceProperties('AWS::SSM::Parameter', { Name: name });

@@ -32,6 +32,10 @@ export class FoundationStack extends cdk.Stack {
   readonly authAuditLogTable: dynamodb.Table;
   readonly rateLimitsTable: dynamodb.Table;
   readonly cognitoIdentitiesTable: dynamodb.Table;
+  readonly rolesTable: dynamodb.Table;
+  readonly groupsTable: dynamodb.Table;
+  readonly roleAssignmentsTable: dynamodb.Table;
+  readonly auditLogTable: dynamodb.Table;
 
   // S3
   readonly audioUploadsBucket: s3.Bucket;
@@ -97,6 +101,8 @@ export class FoundationStack extends cdk.Stack {
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
     });
 
+    // `defaultRoleId` (D-102) is a schema-only attribute — the org's seeded `member` system
+    // role, assigned to new members at provisioning (Phase 3). Not indexed; no GSI needed.
     this.orgsTable = new dynamodb.Table(this, 'OrgsTable', {
       tableName: 'heediq-orgs',
       partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
@@ -199,6 +205,62 @@ export class FoundationStack extends cdk.Stack {
       indexName: 'by-source',
       partitionKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // ── RBAC & audit trail tables (D-102, Phase 1 — schema only, no consumers yet) ───────
+    // pk/sk composite convention, matching heediq-auth-audit-log / heediq-user-auth-methods.
+
+    // pk=ORG#<orgId>, sk=ROLE#<roleId>
+    this.rolesTable = new dynamodb.Table(this, 'RolesTable', {
+      tableName: 'heediq-roles',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+
+    // pk=ORG#<orgId>, sk=GROUP#<groupId>
+    this.groupsTable = new dynamodb.Table(this, 'GroupsTable', {
+      tableName: 'heediq-groups',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+
+    // pk=ORG#<orgId>#USER#<userId>, sk=ROLE#<roleId> | GROUP#<groupId> — a user can hold
+    // multiple direct role/group assignments. `by-role` is a sparse GSI: the `roleId`
+    // attribute is present only on role-type rows, so group-type rows are naturally
+    // excluded without a parsed-substring index (which DynamoDB doesn't support).
+    this.roleAssignmentsTable = new dynamodb.Table(this, 'RoleAssignmentsTable', {
+      tableName: 'heediq-role-assignments',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+    this.roleAssignmentsTable.addGlobalSecondaryIndex({
+      indexName: 'by-role',
+      partitionKey: { name: 'roleId', type: dynamodb.AttributeType.STRING },
+    });
+
+    // pk=ORG#<orgId>, sk=<isoTimestamp>#<eventId> — write-once by construction (no
+    // update/delete code path). `by-user` GSI serves "show this user's actions" queries.
+    this.auditLogTable = new dynamodb.Table(this, 'AuditLogTable', {
+      tableName: 'heediq-audit-log',
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy,
+    });
+    this.auditLogTable.addGlobalSecondaryIndex({
+      indexName: 'by-user',
+      partitionKey: { name: 'actorUserId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
     });
 
     // ── SQS — transcription queue (D-023) ────────────────────────────────────
@@ -552,6 +614,10 @@ export class FoundationStack extends cdk.Stack {
       // Deterministic ARN — role created in SharedServicesStack (D-058)
       ['/heediq/api/ses-sending-role-arn',        `arn:aws:iam::${ACCOUNTS.sharedServices}:role/heediq-ses-email-sending`, 'Cross-account IAM role for SES email sending'],
       ['/heediq/api/ws-connections-table-name',   this.wsConnectionsTable.tableName,              'DynamoDB WebSocket connections table name'],
+      ['/heediq/api/roles-table-name',            this.rolesTable.tableName,            'DynamoDB RBAC roles table name (D-102)'],
+      ['/heediq/api/groups-table-name',           this.groupsTable.tableName,           'DynamoDB RBAC groups table name (D-102)'],
+      ['/heediq/api/role-assignments-table-name', this.roleAssignmentsTable.tableName,  'DynamoDB RBAC role-assignments table name (D-102)'],
+      ['/heediq/api/audit-log-table-name',        this.auditLogTable.tableName,         'DynamoDB unified audit-log table name (D-102)'],
     ];
 
     for (const [name, value, description] of ssmParams) {
