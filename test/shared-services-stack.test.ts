@@ -23,6 +23,33 @@ describe('SharedServicesStack', () => {
     });
   });
 
+  it('ECR lifecycle rule prefixes match the tags CI actually pushes (D-101)', () => {
+    // deploy.yml pushes free-sha-<7chars> / paid-sha-<7chars> — regression guard for the
+    // D-101 bug where tagPrefixList: ['sha-'] never matched either tag, so nothing expired.
+    template.hasResourceProperties('AWS::ECR::Repository', {
+      LifecyclePolicy: Match.objectLike({
+        LifecyclePolicyText: Match.serializedJson(
+          Match.objectLike({
+            rules: Match.arrayWith([
+              Match.objectLike({
+                selection: Match.objectLike({
+                  tagPrefixList: ['free-sha-'],
+                  countNumber: 5,
+                }),
+              }),
+              Match.objectLike({
+                selection: Match.objectLike({
+                  tagPrefixList: ['paid-sha-'],
+                  countNumber: 5,
+                }),
+              }),
+            ]),
+          }),
+        ),
+      }),
+    });
+  });
+
   it('ECR repo policy has AllowWorkloadAccountPull statement', () => {
     // CDK renders AccountPrincipal as Fn::Join tokens — check Sid only; account IDs
     // are constants and the trust boundary is enforced by the stack env.
