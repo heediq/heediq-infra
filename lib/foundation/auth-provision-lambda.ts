@@ -25,6 +25,9 @@ export function createAuthProvisionFn(scope: Construct, tables: FoundationTables
       COGNITO_IDENTITIES_TABLE_NAME: tables.cognitoIdentitiesTable.tableName,
       USER_AUTH_METHODS_TABLE_NAME: tables.userAuthMethodsTable.tableName,
       AUTH_AUDIT_LOG_TABLE_NAME: tables.authAuditLogTable.tableName,
+      ROLES_TABLE_NAME: tables.rolesTable.tableName,
+      GROUPS_TABLE_NAME: tables.groupsTable.tableName,
+      ROLE_ASSIGNMENTS_TABLE_NAME: tables.roleAssignmentsTable.tableName,
     },
   });
   tables.orgsTable.grantReadWriteData(authProvisionFn);
@@ -32,6 +35,9 @@ export function createAuthProvisionFn(scope: Construct, tables: FoundationTables
   tables.cognitoIdentitiesTable.grantReadWriteData(authProvisionFn);
   tables.userAuthMethodsTable.grantReadWriteData(authProvisionFn);
   tables.authAuditLogTable.grantWriteData(authProvisionFn);
+  tables.rolesTable.grantReadWriteData(authProvisionFn);
+  tables.groupsTable.grantReadWriteData(authProvisionFn);
+  tables.roleAssignmentsTable.grantReadWriteData(authProvisionFn);
 
   return authProvisionFn;
 }
