@@ -21,6 +21,9 @@ describe('FoundationStack — auth Lambda triggers (dev)', () => {
         Variables: Match.objectLike({
           ORGS_TABLE_NAME: Match.anyValue(),
           USERS_TABLE_NAME: Match.anyValue(),
+          ROLES_TABLE_NAME: Match.anyValue(),
+          GROUPS_TABLE_NAME: Match.anyValue(),
+          ROLE_ASSIGNMENTS_TABLE_NAME: Match.anyValue(),
         }),
       },
     });

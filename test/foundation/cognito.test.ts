@@ -83,4 +83,12 @@ describe('FoundationStack — Cognito (dev)', () => {
       ]),
     });
   });
+
+  it('User Pool defines custom:permissions attribute (D-105)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      Schema: Match.arrayWith([
+        Match.objectLike({ Name: 'permissions', AttributeDataType: 'String', Mutable: true }),
+      ]),
+    });
+  });
 });

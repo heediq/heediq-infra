@@ -171,9 +171,8 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
   });
 
   // pk=ORG#<orgId>#USER#<userId>, sk=ROLE#<roleId> | GROUP#<groupId> — a user can hold
-  // multiple direct role/group assignments. `by-role` is a sparse GSI: the `roleId`
-  // attribute is present only on role-type rows, so group-type rows are naturally
-  // excluded without a parsed-substring index (which DynamoDB doesn't support).
+  // multiple direct role/group assignments. `by-role` is a sparse GSI (`roleId` present only
+  // on role-type rows) kept for future by-role lookups; not currently queried by any consumer.
   const roleAssignmentsTable = new dynamodb.Table(scope, 'RoleAssignmentsTable', {
     tableName: 'heediq-role-assignments',
     partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
