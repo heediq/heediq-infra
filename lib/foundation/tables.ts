@@ -171,9 +171,12 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
   });
 
   // pk=ORG#<orgId>#USER#<userId>, sk=ROLE#<roleId> | GROUP#<groupId> — a user can hold
-  // multiple direct role/group assignments. `by-role` is a sparse GSI: the `roleId`
-  // attribute is present only on role-type rows, so group-type rows are naturally
-  // excluded without a parsed-substring index (which DynamoDB doesn't support).
+  // multiple direct role/group assignments. `by-role`/`by-group` are sparse GSIs: `roleId`
+  // is present only on role-type rows and `groupId` only on group-type rows, so each index
+  // naturally excludes the other type without a parsed-substring index (which DynamoDB
+  // doesn't support). Phase 3 (D-102) uses both to fan out an rbacVersion bump on
+  // `heediq-users` to every affected user when a role's permissions or a group's roleIds
+  // change — direct assignees via `by-role`, group members via `by-group`.
   const roleAssignmentsTable = new dynamodb.Table(scope, 'RoleAssignmentsTable', {
     tableName: 'heediq-role-assignments',
     partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
@@ -185,6 +188,10 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
   roleAssignmentsTable.addGlobalSecondaryIndex({
     indexName: 'by-role',
     partitionKey: { name: 'roleId', type: dynamodb.AttributeType.STRING },
+  });
+  roleAssignmentsTable.addGlobalSecondaryIndex({
+    indexName: 'by-group',
+    partitionKey: { name: 'groupId', type: dynamodb.AttributeType.STRING },
   });
 
   // pk=ORG#<orgId>, sk=<isoTimestamp>#<eventId> — write-once by construction (no

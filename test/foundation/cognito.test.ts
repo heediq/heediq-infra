@@ -83,4 +83,13 @@ describe('FoundationStack — Cognito (dev)', () => {
       ]),
     });
   });
+
+  it('User Pool defines custom:permissions and custom:rbacVersion attributes (D-102 Phase 3)', () => {
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      Schema: Match.arrayWith([
+        Match.objectLike({ Name: 'permissions', AttributeDataType: 'String', Mutable: true }),
+        Match.objectLike({ Name: 'rbacVersion', AttributeDataType: 'Number', Mutable: true }),
+      ]),
+    });
+  });
 });

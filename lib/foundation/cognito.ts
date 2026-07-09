@@ -44,11 +44,17 @@ export function createCognitoUserPool(scope: Construct, props: FoundationCognito
     // (D-077, D-099), never by the user or client directly — mutable so the trigger can
     // update them post-creation. custom:accountId is the stable, app-owned identity
     // anchor (D-099): decoupled from Cognito's `sub`, which can be repointed by
-    // AdminLinkProviderForUser during account linking.
+    // AdminLinkProviderForUser during account linking. custom:permissions (D-102, Phase 3)
+    // is a JSON-stringified array of the user's resolved effective Permission strings, baked
+    // in at token issuance — default 2048-char max comfortably covers the current 8-entry
+    // catalog. custom:rbacVersion is compared per-request against the live counter on
+    // heediq-users to force re-login the moment a user's roles/permissions change.
     customAttributes: {
       orgId: new cognito.StringAttribute({ mutable: true }),
       role: new cognito.StringAttribute({ mutable: true }),
       accountId: new cognito.StringAttribute({ mutable: true }),
+      permissions: new cognito.StringAttribute({ mutable: true }),
+      rbacVersion: new cognito.NumberAttribute({ mutable: true }),
     },
     lambdaTriggers: {
       preTokenGeneration: authProvisionFn,

@@ -146,7 +146,7 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
     });
   });
 
-  it('role-assignments table has pk/sk key schema and a sparse by-role GSI', () => {
+  it('role-assignments table has pk/sk key schema and sparse by-role/by-group GSIs', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-role-assignments',
       KeySchema: [
@@ -157,6 +157,10 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
         Match.objectLike({
           IndexName: 'by-role',
           KeySchema: [{ AttributeName: 'roleId', KeyType: 'HASH' }],
+        }),
+        Match.objectLike({
+          IndexName: 'by-group',
+          KeySchema: [{ AttributeName: 'groupId', KeyType: 'HASH' }],
         }),
       ]),
     });
