@@ -80,13 +80,17 @@ export class ApiStack extends cdk.Stack {
     props.foundation.authAuditLogTable.grantWriteData(apiFn);
     props.foundation.rateLimitsTable.grantReadWriteData(apiFn);
     props.foundation.cognitoIdentitiesTable.grantReadWriteData(apiFn);
-    // RBAC & audit trail (D-102 Phase 2) — roles/groups/role-assignments are read-write; the
-    // audit log is write-only, enforcing "no delete/update code path" (D-102) at the IAM layer
-    // too, not just convention (mirrors authAuditLogTable's write-only grant above).
+    // RBAC & audit trail (D-102 Phase 2/5) — roles/groups/role-assignments are read-write. The
+    // audit log adds a narrow `Query`-only grant on top of `grantWriteData` (D-102 Phase 5's
+    // /org/audit-log viewer) — GetItem/Scan stay blocked so no full-table read path opens up.
+    // "Write-once" (no update/delete in practice) is an application-code guarantee only
+    // (`writeAuditEvent` never issues Update/Delete) — `grantWriteData` itself always includes
+    // UpdateItem/DeleteItem at the IAM layer, same as every other table here.
     props.foundation.rolesTable.grantReadWriteData(apiFn);
     props.foundation.groupsTable.grantReadWriteData(apiFn);
     props.foundation.roleAssignmentsTable.grantReadWriteData(apiFn);
     props.foundation.auditLogTable.grantWriteData(apiFn);
+    props.foundation.auditLogTable.grant(apiFn, 'dynamodb:Query');
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);

@@ -149,7 +149,7 @@ describe('ApiStack (dev)', () => {
     expect(actions).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem/)]));
   });
 
-  it('API Lambda role has write-only access to the audit-log table, no read (D-102 — enforces write-once at the IAM layer)', () => {
+  it('API Lambda role has write + Query access to the audit-log table, no GetItem/Scan (D-102 Phase 5 — /org/audit-log viewer; GetItem/Scan stay blocked so no full-table read path opens up)', () => {
     const statements = findAllIamStatements(api);
     const auditLogStatements = statements.filter((stmt: any) => {
       const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
@@ -159,7 +159,8 @@ describe('ApiStack (dev)', () => {
       Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action],
     );
     expect(actions).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:PutItem/)]));
-    expect(actions).not.toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem|dynamodb:Query|dynamodb:Scan/)]));
+    expect(actions).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:Query/)]));
+    expect(actions).not.toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem|dynamodb:Scan/)]));
   });
 
   it('API Lambda role has secretsmanager:GetSecretValue for /heediq/api/* secrets', () => {
