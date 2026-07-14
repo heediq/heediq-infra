@@ -29,19 +29,20 @@ export class SharedServicesStack extends cdk.Stack {
           maxImageAge: cdk.Duration.days(1),
         },
         {
-          description: 'Keep last 5 free-tier images',
+          description: 'Keep last 3 free-tier images',
           tagStatus: ecr.TagStatus.TAGGED,
           // Actual CI tags are free-sha-<7chars> / paid-sha-<7chars> (deploy.yml), not bare
           // sha-<7chars> — D-101 fixed this prefix after finding the old rule never matched,
-          // so every image was retained forever instead of being expired.
+          // so every image was retained forever instead of being expired. D-108 lowered the
+          // count from 5 to 3 (current + 1 rollback per env, covers dev+staging+prod once live).
           tagPrefixList: ['free-sha-'],
-          maxImageCount: 5,
+          maxImageCount: 3,
         },
         {
-          description: 'Keep last 5 paid-tier images',
+          description: 'Keep last 3 paid-tier images',
           tagStatus: ecr.TagStatus.TAGGED,
           tagPrefixList: ['paid-sha-'],
-          maxImageCount: 5,
+          maxImageCount: 3,
         },
       ],
       removalPolicy: cdk.RemovalPolicy.RETAIN,
