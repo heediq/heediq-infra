@@ -23,9 +23,10 @@ describe('SharedServicesStack', () => {
     });
   });
 
-  it('ECR lifecycle rule prefixes match the tags CI actually pushes (D-101)', () => {
+  it('ECR lifecycle rule prefixes match the tags CI actually pushes (D-101, count per D-108)', () => {
     // deploy.yml pushes free-sha-<7chars> / paid-sha-<7chars> — regression guard for the
     // D-101 bug where tagPrefixList: ['sha-'] never matched either tag, so nothing expired.
+    // Keep-count is 3/tier per D-108 (current + 1 rollback covers dev+staging+prod mid-promotion).
     template.hasResourceProperties('AWS::ECR::Repository', {
       LifecyclePolicy: Match.objectLike({
         LifecyclePolicyText: Match.serializedJson(
@@ -34,13 +35,13 @@ describe('SharedServicesStack', () => {
               Match.objectLike({
                 selection: Match.objectLike({
                   tagPrefixList: ['free-sha-'],
-                  countNumber: 5,
+                  countNumber: 3,
                 }),
               }),
               Match.objectLike({
                 selection: Match.objectLike({
                   tagPrefixList: ['paid-sha-'],
-                  countNumber: 5,
+                  countNumber: 3,
                 }),
               }),
             ]),
