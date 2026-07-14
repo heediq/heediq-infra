@@ -134,7 +134,7 @@ describe('WebSocketStack (dev)', () => {
 
   // ── IAM ───────────────────────────────────────────────────────────────────
 
-  it('pusher Lambda role has execute-api:ManageConnections permission', () => {
+  it('pusher Lambda role has execute-api:ManageConnections permission (via grantPush)', () => {
     ws.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -143,6 +143,28 @@ describe('WebSocketStack (dev)', () => {
           }),
         ]),
       }),
+    });
+  });
+
+  // ── DynamoDB GSIs (D-109) ───────────────────────────────────────────────────
+
+  it('ws-connections table has by-user, by-org, and by-broadcast GSIs (no by-source)', () => {
+    const { foundation } = buildTemplates('dev');
+    foundation.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-user',
+          KeySchema: Match.arrayWith([Match.objectLike({ AttributeName: 'userId' })]),
+        }),
+        Match.objectLike({
+          IndexName: 'by-org',
+          KeySchema: Match.arrayWith([Match.objectLike({ AttributeName: 'orgId' })]),
+        }),
+        Match.objectLike({
+          IndexName: 'by-broadcast',
+          KeySchema: Match.arrayWith([Match.objectLike({ AttributeName: 'broadcastKey' })]),
+        }),
+      ]),
     });
   });
 
@@ -209,6 +231,12 @@ describe('WebSocketStack (dev)', () => {
   it('exports ws-regional-domain-name SSM param for Route 53 alias target', () => {
     ws.hasResourceProperties('AWS::SSM::Parameter', {
       Name: '/heediq/api/ws-regional-domain-name',
+    });
+  });
+
+  it('exports ws-management-endpoint SSM param for server-side PostToConnection calls (D-109)', () => {
+    ws.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/heediq/api/ws-management-endpoint',
     });
   });
 });

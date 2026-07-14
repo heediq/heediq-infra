@@ -16,6 +16,13 @@ export interface WebSocketStackProps extends cdk.StackProps {
 }
 
 export class WebSocketStack extends cdk.Stack {
+  private readonly wsApiId: string;
+  private readonly wsStageName: string;
+  private readonly wsConnectionsTable: dynamodb.Table;
+  // Exposed for other stacks (e.g. ApiStack) whose Lambdas call the shared wsPush library
+  // directly (D-109) — avoids an SSM lookup for same-account, same-region cross-stack use.
+  public readonly wsManagementEndpoint: string;
+
   constructor(scope: Construct, id: string, props: WebSocketStackProps) {
     super(scope, id, props);
 
@@ -59,8 +66,8 @@ export class WebSocketStack extends cdk.Stack {
       },
     });
 
-    // Query by-source GSI; delete stale connections on GoneException (D-061)
-    props.foundation.wsConnectionsTable.grantReadWriteData(pusherFn);
+    // Table read/write + ManageConnections granted below via grantPush() (D-109) — queries
+    // by-org GSI (job_status pushes at org scope); deletes stale connections on GoneException.
 
     // DDB Streams trigger — every MODIFY event on heediq-jobs fans out to connected clients
     pusherFn.addEventSource(
@@ -123,17 +130,17 @@ export class WebSocketStack extends cdk.Stack {
       autoDeploy: true,
     });
 
-    // ── execute-api:ManageConnections grant (D-061) ───────────────────────────
-    // Pusher Lambda calls POST /@connections/{connectionId} to push status to clients.
-    // Resource: arn:aws:execute-api:REGION:ACCOUNT:API_ID/STAGE/POST/@connections/*
-    pusherFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          `arn:aws:execute-api:${this.region}:${this.account}:${wsApi.ref}/${stage.ref}/POST/@connections/*`,
-        ],
-      }),
-    );
+    this.wsApiId = wsApi.ref;
+    this.wsStageName = stage.stageName!;
+    this.wsConnectionsTable = props.foundation.wsConnectionsTable;
+    this.wsManagementEndpoint = `https://${this.wsApiId}.execute-api.${this.region}.amazonaws.com/${this.wsStageName}`;
+
+    // ── execute-api:ManageConnections grant (D-061, generalized D-109) ────────
+    // Any Lambda that calls the shared wsPush library (heediq-api's src/lib/wsPush.ts) needs
+    // this grant, not just the pusher — grantPush() is the reusable entry point so a future
+    // feature's Lambda (in this stack or another) can push without repeating the wiring below.
+    this.grantPush(pusherFn);
+    pusherFn.addEnvironment('WS_MANAGEMENT_ENDPOINT', this.wsManagementEndpoint);
 
     // ── Custom domain (D-052, D-053) ─────────────────────────────────────────
     // Cert comes from FoundationStack.wildcardCert — same workload account, same region.
@@ -176,5 +183,32 @@ export class WebSocketStack extends cdk.Stack {
       stringValue: domainName.attrRegionalDomainName,
       description: 'API Gateway WebSocket regional domain name (Route 53 alias target)',
     });
+
+    // Management API endpoint (D-109) — what any push-calling Lambda's ApiGatewayManagementApiClient
+    // targets to call PostToConnection/DeleteConnection. Distinct from the public wss:// client URL
+    // above: this is the plain execute-api endpoint, built from the API id + region + stage, not the
+    // custom domain (server-side pushes don't go through the custom domain mapping).
+    new ssm.StringParameter(this, 'WsManagementEndpointParam', {
+      parameterName: '/heediq/api/ws-management-endpoint',
+      stringValue: this.wsManagementEndpoint,
+      description: 'API Gateway Management API endpoint for server-side WS pushes (PostToConnection)',
+    });
+  }
+
+  // ── grantPush (D-109) ────────────────────────────────────────────────────────
+  // Reusable entry point for any Lambda (in this stack or another) that calls the shared
+  // wsPush library (heediq-api's src/lib/wsPush.ts): read/write on heediq-ws-connections
+  // (reads to find target connections, writes to delete stale ones on GoneException) plus
+  // execute-api:ManageConnections scoped to this WebSocket API's stage.
+  public grantPush(fn: lambda.Function): void {
+    this.wsConnectionsTable.grantReadWriteData(fn);
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [
+          `arn:aws:execute-api:${this.region}:${this.account}:${this.wsApiId}/${this.wsStageName}/POST/@connections/*`,
+        ],
+      }),
+    );
   }
 }

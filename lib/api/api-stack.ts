@@ -8,11 +8,13 @@ import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES, COMPUTE, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
+import { WebSocketStack } from '../websocket/websocket-stack';
 import { Route53AliasRecord } from '../shared/route53-alias-record';
 
 export interface ApiStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
   foundation: FoundationStack;
+  webSocket: WebSocketStack;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -66,6 +68,10 @@ export class ApiStack extends cdk.Stack {
         COGNITO_CLIENT_ID:         props.foundation.userPoolClient.userPoolClientId,
         // Summarization queue — direct path for non-audio sources (D-065, D-026)
         SUMMARIZATION_QUEUE_URL:   `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-summarization`,
+        // WS push (D-109) — lets this Lambda call the shared wsPush library directly for
+        // events with no natural backing table row (unlike job_status, which stays on its
+        // DDB Streams trigger in WebSocketStack).
+        WS_MANAGEMENT_ENDPOINT:    props.webSocket.wsManagementEndpoint,
       },
     });
 
@@ -75,7 +81,9 @@ export class ApiStack extends cdk.Stack {
     props.foundation.orgsTable.grantReadWriteData(apiFn);
     props.foundation.usersTable.grantReadWriteData(apiFn);
     props.foundation.jobsTable.grantReadWriteData(apiFn);
-    props.foundation.wsConnectionsTable.grantReadData(apiFn);
+    // Table read/write + ManageConnections granted via grantPush() (D-109) — this Lambda is a
+    // direct-call pusher for events without a natural backing table row.
+    props.webSocket.grantPush(apiFn);
     props.foundation.userAuthMethodsTable.grantReadWriteData(apiFn);
     props.foundation.authAuditLogTable.grantWriteData(apiFn);
     props.foundation.rateLimitsTable.grantReadWriteData(apiFn);

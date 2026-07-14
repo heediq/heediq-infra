@@ -73,7 +73,7 @@ if (targetEnv === 'shared') {
     foundation,
   });
 
-  new WebSocketStack(app, 'HeediqWebSocketStack', {
+  const webSocketStack = new WebSocketStack(app, 'HeediqWebSocketStack', {
     env,
     workloadEnv,
     terminationProtection,
@@ -85,6 +85,7 @@ if (targetEnv === 'shared') {
     workloadEnv,
     terminationProtection,
     foundation,
+    webSocket: webSocketStack,
   });
 
   new WebStack(app, 'HeediqWebStack', {
