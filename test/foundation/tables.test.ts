@@ -93,13 +93,15 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
     });
   });
 
-  it('ws-connections table has connectionId PK, expiresAt TTL, and by-source GSI', () => {
+  it('ws-connections table has connectionId PK, expiresAt TTL, and by-user/by-org/by-broadcast GSIs (D-109)', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-ws-connections',
       KeySchema: [{ AttributeName: 'connectionId', KeyType: 'HASH' }],
       TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
       GlobalSecondaryIndexes: Match.arrayWith([
-        Match.objectLike({ IndexName: 'by-source' }),
+        Match.objectLike({ IndexName: 'by-user' }),
+        Match.objectLike({ IndexName: 'by-org' }),
+        Match.objectLike({ IndexName: 'by-broadcast' }),
       ]),
     });
   });

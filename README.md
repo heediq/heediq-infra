@@ -18,7 +18,7 @@ resources themselves.
 - `lib/api/api-stack.ts` — Lambda (Hono API) + API Gateway
 - `lib/web/web-stack.ts` — S3 + CloudFront (PWA hosting)
 - `lib/transcription/transcription-stack.ts` — ECS cluster + EC2 GPU Spot ASG + task definitions (D-059)
-- `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda (D-061)
+- `lib/websocket/websocket-stack.ts` — WebSocket API + connection Lambda + Status Pusher Lambda; generalized real-time push framework (D-061, generalized D-109)
 - `lib/summarization/summarization-stack.ts` — SQS queue + Lambda (Claude extraction worker, D-065)
 - `lib/observability/observability-stack.ts` — per-env CloudWatch dashboard (D-085)
 - `.github/workflows/deploy.yml` — CI/CD pipeline
@@ -193,6 +193,7 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | `/heediq/api/role-assignments-table-name` | `heediq-role-assignments` (D-102) |
 | `/heediq/api/audit-log-table-name` | `heediq-audit-log` (D-102) |
 | `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` — WebSocket connection tracking (D-061) |
+| `/heediq/api/ws-management-endpoint` | API Gateway Management API endpoint (server-side `PostToConnection` calls) — consumed directly by `WebSocketStack.grantPush()` callers via CDK prop, this SSM copy is for any future out-of-account/region consumer (D-109) |
 | `/heediq/api/audio-bucket-name` | `heediq-audio-uploads-{accountId}` |
 | `/heediq/api/web-assets-bucket-name` | `heediq-web-assets-{accountId}` |
 | `/heediq/api/transcription-queue-url` | SQS queue URL |
@@ -229,15 +230,20 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 
 **Spot interruption (D-066):** Pipes deletes the SQS message the moment it hands the job to `RunTask` — before the worker process starts. There is no visibility-timeout left to expire by the time a Spot SIGTERM arrives. Worker catches SIGTERM → writes `status=retrying` → **explicitly re-enqueues** `TranscriptionJobMessage` to `heediq-transcription` with the `tier` message attribute preserved (required for the Pipe filter to re-route the retried job correctly).
 
-### WebSocketStack resources (D-061)
+### WebSocketStack resources (D-061, generalized D-109)
+
+`WebSocketStack` is a reusable real-time push framework, not a job-status-only pipe: any feature
+addresses a connection by `user`/`org`/`broadcast` scope (`@heediq/shared`'s `WsScopeSchema`) and
+pushes a typed event from the `WsEventPayloadMap` registry (`ws.ts`) — `job_status` is just the
+first registered event type, migrated unchanged from D-061.
 
 | Resource | Details |
 |---|---|
 | WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes, stage `ws`, auto-deploy |
-| Connection Lambda | `heediq-ws-connect` — on `$connect`: validates JWT, stores `connectionId` in `heediq-ws-connections`; on `$disconnect`: removes row. 29s timeout (WebSocket $connect hard limit). |
-| Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams on `heediq-jobs`; queries `heediq-ws-connections` GSI `by-source`; POSTs status to each active `connectionId` via `execute-api:ManageConnections`. Deletes stale connections on `GoneException`. |
+| Connection Lambda | `heediq-ws-connect` — on `$connect`: validates JWT, stores `connectionId` + `userId`/`orgId`/`broadcastKey` (constant `'ALL'`) in `heediq-ws-connections`; on `$disconnect`: removes row. 29s timeout (WebSocket $connect hard limit). Real implementation is `heediq-api/src/handlers/ws-connect.ts`. |
+| Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams (`MODIFY`) on `heediq-jobs`; builds a `job_status` envelope and pushes it at **org** scope (so every connected user in the org sees library-wide status, not just the uploader) via the shared `wsPush` library. Deletes stale connections on `GoneException`. Real implementation is `heediq-api/src/handlers/ws-pusher.ts` + `src/lib/wsPush.ts`. |
 | Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: pusher role | `execute-api:ManageConnections` scoped to WebSocket API ARN |
+| `grantPush(fn)` | Reusable IAM helper (D-109) — grants `heediq-ws-connections` read/write plus `execute-api:ManageConnections` scoped to this WebSocket API's stage to any Lambda (in this stack or another) that calls `wsPush`. `ApiStack`'s main Lambda calls this directly so future features can push events without a DDB-Streams round trip. |
 
 **Status stages pushed to client:** `queued → starting → transcribing → diarizing (large-v3 only) → summarizing → done / failed`
 
@@ -249,6 +255,9 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 |---|---|
 | `/heediq/api/ws-endpoint-url` | `wss://ws-{env}.heediq.com` — consumed by `heediq-web` and `heediq-api` |
 | `/heediq/api/ws-regional-domain-name` | API Gateway regional domain name — Route 53 A-alias target |
+| `/heediq/api/ws-management-endpoint` | API Gateway Management API endpoint for server-side `PostToConnection` calls (D-109) |
+
+**Gotcha (D-109):** `ApiStack` takes `WebSocketStack` as a direct CDK construct prop (`props.webSocket`), not an SSM lookup, to read `wsManagementEndpoint` and call `grantPush()` — same pattern as `FoundationStack`'s cross-stack table refs. This means `ApiStack` and `WebSocketStack` must deploy together in the same CDK app run; renaming/replacing `WebSocketStack` requires updating `bin/infra.ts`'s wiring, not just redeploying `WebSocketStack` alone.
 
 ### SummarizationStack resources (D-032, D-055, D-065)
 
@@ -360,7 +369,7 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) | — |
 | `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId), `by-email` (PK=email) | — |
 | `heediq-jobs` | `sourceId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |
-| `heediq-ws-connections` | `connectionId` | — | `by-source` (PK=`sourceId`), TTL on `expiresAt` | — |
+| `heediq-ws-connections` | `connectionId` | — | `by-user` (PK=`userId`), `by-org` (PK=`orgId`), `by-broadcast` (PK=`broadcastKey`, constant `'ALL'`), TTL on `expiresAt` | — |
 | `heediq-user-auth-methods` | `pk` | `sk` | — | — |
 | `heediq-auth-audit-log` | `pk` | `sk` | — | — |
 | `heediq-rate-limits` | `pk` | — | — | TTL on `expiresAt` (cleanup only, not correctness) |
@@ -370,7 +379,7 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-role-assignments` | `pk` | `sk` | `by-role` (PK=`roleId`, sparse) | — |
 | `heediq-audit-log` | `pk` | `sk` | `by-user` (PK=`actorUserId` SK=`sk`) | — |
 
-`heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
+`heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed. Its GSIs were generalized from a single `by-source` (per-resource) index to `by-user`/`by-org`/`by-broadcast` (D-109) so any feature can address connections by user, org, or a global broadcast instead of a one-off per-resource scope.
 
 `heediq-roles`/`heediq-groups`/`heediq-role-assignments`/`heediq-audit-log` (D-102, all 5 phases
 shipped — consumed by `heediq-api`'s `routes/roles.ts`/`groups.ts`/`role-assignments.ts`/`audit-log.ts`)

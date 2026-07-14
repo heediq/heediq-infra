@@ -2,6 +2,7 @@ import { describe, it, beforeAll, expect } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { FoundationStack } from '../lib/foundation/foundation-stack';
+import { WebSocketStack } from '../lib/websocket/websocket-stack';
 import { ApiStack } from '../lib/api/api-stack';
 
 function buildTemplates(workloadEnv: 'dev' | 'prod' = 'dev') {
@@ -14,10 +15,17 @@ function buildTemplates(workloadEnv: 'dev' | 'prod' = 'dev') {
     workloadEnv,
   });
 
+  const webSocket = new WebSocketStack(app, 'TestWebSocketStack', {
+    env,
+    workloadEnv,
+    foundation,
+  });
+
   const api = new ApiStack(app, 'TestApiStack', {
     env,
     workloadEnv,
     foundation,
+    webSocket,
   });
 
   return {

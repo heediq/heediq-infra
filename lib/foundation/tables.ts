@@ -133,7 +133,10 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
     removalPolicy,
   });
 
-  // PK = connectionId; GSI by-source for fan-out; TTL cleans up stale rows (D-061)
+  // PK = connectionId; GSIs by-user/by-org/by-broadcast for the three WS fan-out scopes
+  // (D-109, generalizes D-061); TTL cleans up stale rows. Every row carries userId + orgId
+  // (stamped by the connect Lambda from the validated JWT) and a constant broadcastKey='ALL'
+  // so a broadcast push can query one GSI partition instead of a full table Scan.
   const wsConnectionsTable = new dynamodb.Table(scope, 'WsConnectionsTable', {
     tableName: 'heediq-ws-connections',
     partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
@@ -142,8 +145,18 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
     removalPolicy,
   });
   wsConnectionsTable.addGlobalSecondaryIndex({
-    indexName: 'by-source',
-    partitionKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
+    indexName: 'by-user',
+    partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+    projectionType: dynamodb.ProjectionType.ALL,
+  });
+  wsConnectionsTable.addGlobalSecondaryIndex({
+    indexName: 'by-org',
+    partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+    projectionType: dynamodb.ProjectionType.ALL,
+  });
+  wsConnectionsTable.addGlobalSecondaryIndex({
+    indexName: 'by-broadcast',
+    partitionKey: { name: 'broadcastKey', type: dynamodb.AttributeType.STRING },
     projectionType: dynamodb.ProjectionType.ALL,
   });
 
