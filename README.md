@@ -188,6 +188,10 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | `/heediq/api/orgs-table-name` | `heediq-orgs` |
 | `/heediq/api/users-table-name` | `heediq-users` |
 | `/heediq/api/jobs-table-name` | `heediq-jobs` |
+| `/heediq/api/roles-table-name` | `heediq-roles` (D-102) |
+| `/heediq/api/groups-table-name` | `heediq-groups` (D-102) |
+| `/heediq/api/role-assignments-table-name` | `heediq-role-assignments` (D-102) |
+| `/heediq/api/audit-log-table-name` | `heediq-audit-log` (D-102) |
 | `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` — WebSocket connection tracking (D-061) |
 | `/heediq/api/audio-bucket-name` | `heediq-audio-uploads-{accountId}` |
 | `/heediq/api/web-assets-bucket-name` | `heediq-web-assets-{accountId}` |
@@ -368,8 +372,9 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed.
 
-`heediq-roles`/`heediq-groups`/`heediq-role-assignments`/`heediq-audit-log` (D-102, Phase 1 — tables
-only, not yet consumed by any route) all key off `pk = ORG#<orgId>` for org-scoped isolation.
+`heediq-roles`/`heediq-groups`/`heediq-role-assignments`/`heediq-audit-log` (D-102, all 5 phases
+shipped — consumed by `heediq-api`'s `routes/roles.ts`/`groups.ts`/`role-assignments.ts`/`audit-log.ts`)
+all key off `pk = ORG#<orgId>` for org-scoped isolation.
 `heediq-role-assignments` additionally keys `pk = ORG#<orgId>#USER#<userId>`, `sk = ROLE#<roleId> |
 GROUP#<groupId>` so a user's direct role/group assignments live together; its `by-role` GSI is sparse
 (only role-type rows carry `roleId`) so it naturally excludes group-type rows. `heediq-audit-log` is
