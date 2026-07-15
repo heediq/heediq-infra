@@ -988,3 +988,14 @@ bash scripts/setup-budgets.sh
 - **Cross-account ECR pull from `fromRegistry` triggers a CDK warning** — `ContainerImage.fromRegistry(ecrUri)` on a cross-account ECR URI produces `[Warning] Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'`. This is expected: `fromEcrRepository` only works for same-account repos. The explicit IAM statements on the execution role (plus the repo resource policy in SharedServicesStack) provide the correct cross-account access. The warning is harmless.
 
 - **Every Lambda/log-producing resource must set an explicit CloudWatch Logs retention (D-093)** — the CDK default when no `logGroup`/`logRetention` is configured is "Never Expire" (unbounded storage growth). `ApiFn` and `SummarizationFn` pass an explicit `logGroup: new logs.LogGroup(...)` built via `logRetentionFor(props.workloadEnv)` (`lib/config.ts`); `TranscriptionStack`'s `TranscriptionLogGroup` does the same. Any new Lambda/ECS task added to this repo must follow the same pattern — don't let CDK auto-create the log group.
+
+- **DynamoDB allows only one GSI add/remove per `cdk deploy`** — CloudFormation rejects a table update
+  that adds/removes more than one GSI in a single change set ("Cannot perform more than one GSI
+  creation or deletion in a single update"). Adding/removing N GSIs on an already-deployed table
+  needs N sequential `cdk deploy HeediqFoundationStack` runs, one GSI change at a time, polling
+  `aws dynamodb describe-table` after each until the new/changed index reaches `ACTIVE` before
+  starting the next. `wsConnectionsTable`'s `by-user`/`by-org`/`by-broadcast` GSIs (D-109) were
+  migrated this way in dev after the table had drifted from a pre-D-109 `by-source` GSI (see D-112 —
+  this migration was blocking an unrelated deploy). Editing multiple GSIs on one table in one PR is
+  fine (`develop`'s code can just declare the target state) — the one-at-a-time constraint only bites
+  when deploying that change to an environment whose live table already has different GSIs.
