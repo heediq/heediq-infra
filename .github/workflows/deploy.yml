@@ -17,6 +17,18 @@ on:
       - '.github/**'
       - 'README.md'
       - 'scripts/**'
+  # Manual re-run of a deploy against the current tip of develop/main — e.g. when a prior
+  # push-triggered run failed on an unrelated, since-fixed check and paths-ignore means the
+  # fix commit itself never re-triggered a deploy (see D-109 WS_MANAGEMENT_ENDPOINT incident,
+  # 2026-07-15: HeediqApiStack silently ran 5 days behind develop after exactly this happened).
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
 
 # AWS_REGION and deploy role ARNs are resolved from GitHub organization-level
 # Actions variables (D-070, D-071) — not hardcoded per repo.
@@ -47,7 +59,9 @@ jobs:
   deploy-dev:
     name: Deploy → dev
     needs: [validate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
     runs-on: ubuntu-latest
     environment: dev
     permissions:
@@ -74,7 +88,9 @@ jobs:
   deploy-staging:
     name: Deploy → staging
     needs: [validate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -101,7 +117,10 @@ jobs:
   approve-prod:
     name: Approve → prod
     needs: [deploy-staging]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      !cancelled() &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy-staging.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod'))
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -111,7 +130,8 @@ jobs:
   deploy-prod:
     name: Deploy → prod
     needs: [approve-prod]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      !cancelled() && needs.approve-prod.result == 'success'
     runs-on: ubuntu-latest
     environment: prod
     permissions:
