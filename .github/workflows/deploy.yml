@@ -7,7 +7,7 @@ on:
       - 'lib/shared-services/**'
       - 'test/shared-services-stack.test.ts'
       - '.github/**'
-      - 'README.md'
+      - '**/*.md'
       - 'scripts/**'
   push:
     branches: [develop, main]
@@ -15,7 +15,7 @@ on:
       - 'lib/shared-services/**'
       - 'test/shared-services-stack.test.ts'
       - '.github/**'
-      - 'README.md'
+      - '**/*.md'
       - 'scripts/**'
   # Manual re-run of a deploy against the current tip of develop/main — e.g. when a prior
   # push-triggered run failed on an unrelated, since-fixed check and paths-ignore means the
