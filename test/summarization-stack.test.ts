@@ -50,15 +50,17 @@ describe('SummarizationStack (dev)', () => {
     });
   });
 
-  it('Lambda environment includes JOBS_TABLE_NAME, SOURCES_TABLE_NAME, AUDIO_BUCKET_NAME, CLAUDE_SECRET_NAME', () => {
+  it('Lambda environment includes jobs/sources/contexts/extracted-items/audio/secret vars', () => {
     summarization.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'heediq-summarization',
       Environment: Match.objectLike({
         Variables: Match.objectLike({
-          JOBS_TABLE_NAME:       Match.anyValue(),
-          SOURCES_TABLE_NAME: Match.anyValue(),
-          AUDIO_BUCKET_NAME:     Match.anyValue(),
-          CLAUDE_SECRET_NAME:    Match.anyValue(),
+          JOBS_TABLE_NAME:            Match.anyValue(),
+          SOURCES_TABLE_NAME:         Match.anyValue(),
+          CONTEXTS_TABLE_NAME:        Match.anyValue(),
+          EXTRACTED_ITEMS_TABLE_NAME: Match.anyValue(),
+          AUDIO_BUCKET_NAME:          Match.anyValue(),
+          CLAUDE_SECRET_NAME:         Match.anyValue(),
         }),
       }),
     });
@@ -185,6 +187,31 @@ describe('SummarizationStack (dev)', () => {
     if (writeStatements.length < 2) {
       throw new Error(
         `Expected at least 2 DynamoDB write statements (jobs + sources), found ${writeStatements.length}`,
+      );
+    }
+  });
+
+  it('Lambda role has a DynamoDB read grant with Query (heediq-contexts by-scope GSI, D-141)', () => {
+    // grantReadData emits Query (among others), which the by-scope GSI classification lookup needs.
+    summarization.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(['dynamodb:Query']),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('Lambda role DynamoDB policy has ≥3 write statements (jobs + sources + extracted-items)', () => {
+    const policies = summarization.findResources('AWS::IAM::Policy');
+    const writeStatements = Object.values(policies)
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+      .filter((s: any) => Array.isArray(s.Action) && s.Action.includes('dynamodb:PutItem'));
+    if (writeStatements.length < 3) {
+      throw new Error(
+        `Expected ≥3 DynamoDB write statements (jobs + sources + extracted-items), found ${writeStatements.length}`,
       );
     }
   });

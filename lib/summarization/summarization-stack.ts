@@ -67,10 +67,13 @@ export class SummarizationStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE, // D-085 — X-Ray active tracing, no separate observability tool
       logGroup: summarizationLogGroup, // D-093 — explicit retention, no unbounded log storage
       environment: {
-        JOBS_TABLE_NAME:       foundation.jobsTable.tableName,
-        SOURCES_TABLE_NAME: foundation.sourcesTable.tableName,
-        AUDIO_BUCKET_NAME:     foundation.audioUploadsBucket.bucketName,
-        CLAUDE_SECRET_NAME:    '/heediq/summarization/anthropic-api-key',
+        JOBS_TABLE_NAME:            foundation.jobsTable.tableName,
+        SOURCES_TABLE_NAME:         foundation.sourcesTable.tableName,
+        // Context Library (D-130): read candidate Contexts to classify against; write ExtractedItems
+        CONTEXTS_TABLE_NAME:        foundation.contextsTable.tableName,
+        EXTRACTED_ITEMS_TABLE_NAME: foundation.extractedItemsTable.tableName,
+        AUDIO_BUCKET_NAME:          foundation.audioUploadsBucket.bucketName,
+        CLAUDE_SECRET_NAME:         '/heediq/summarization/anthropic-api-key',
       },
     });
 
@@ -92,8 +95,15 @@ export class SummarizationStack extends cdk.Stack {
     // DynamoDB — read job details; write status (summarizing → done/failed)
     foundation.jobsTable.grantReadWriteData(summarizationFn);
 
-    // DynamoDB — write structured extraction output (requirements, decisions, etc.)
+    // DynamoDB — read transcript + userId; write gist, classification, proposedClassification (D-130/D-133)
     foundation.sourcesTable.grantReadWriteData(summarizationFn);
+
+    // DynamoDB — read the uploader's candidate Contexts (by-scope GSI) to classify against (D-130/D-141).
+    // grantReadData covers the table's GSIs, so the by-scope index query is included.
+    foundation.contextsTable.grantReadData(summarizationFn);
+
+    // DynamoDB — write per-statement ExtractedItems for the review wizard (D-135)
+    foundation.extractedItemsTable.grantWriteData(summarizationFn);
 
     // S3 — read transcript/content files written by transcription worker or uploaded
     // directly (text files, PDFs, emails, Excel — D-065, D-026)

@@ -132,6 +132,28 @@ describe('WebSocketStack (dev)', () => {
     });
   });
 
+  // ── Classification pusher — heediq-sources stream → classification_ready (D-133) ──
+
+  it('creates classification pusher Lambda named heediq-ws-classification-pusher on Node.js 22', () => {
+    ws.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-ws-classification-pusher',
+      Runtime: 'nodejs22.x',
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ WS_CONNECTIONS_TABLE: Match.anyValue() }),
+      }),
+    });
+  });
+
+  it('classification pusher event source filters to Sources entering pending_review', () => {
+    ws.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      FilterCriteria: Match.objectLike({
+        Filters: Match.arrayWith([
+          Match.objectLike({ Pattern: Match.stringLikeRegexp('pending_review') }),
+        ]),
+      }),
+    });
+  });
+
   // ── IAM ───────────────────────────────────────────────────────────────────
 
   it('pusher Lambda role has execute-api:ManageConnections permission (via grantPush)', () => {

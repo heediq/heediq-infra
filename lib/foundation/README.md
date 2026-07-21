@@ -89,7 +89,7 @@ The `@heediq/shared` `Context` gains `visibility`/`groupId` and the `context:sha
 Mirrors this folder under `test/foundation/`: `cert.test.ts`, `tables.test.ts`, `storage.test.ts`,
 `cognito.test.ts`, `auth-lambdas.test.ts`, `ssm-exports.test.ts`, `stack-prod.test.ts`, plus a shared
 `test-utils.ts` (`synthDevTemplate()` / `synthProdTemplate()`, each synthesizing a fresh stack instance
-per call so tests don't collide on construct IDs). Run via `pnpm test` from `heediq-infra/`. 185 tests
+per call so tests don't collide on construct IDs). Run via `pnpm test` from `heediq-infra/`. 189 tests
 total across the whole package; this folder covers the DynamoDB/S3/SQS/Cognito/SSM assertions
 formerly in the single `test/foundation-stack.test.ts`.
 
@@ -111,3 +111,8 @@ formerly in the single `test/foundation-stack.test.ts`.
   `expiresAt` at read time and treat an expired/revoked grant as no access. Same discipline as
   `heediq-rate-limits` (D-097). Grants are the single regulated crossing of D-021 org isolation
   (D-142); authorize against a live grant on every request, never cache it into the JWT.
+- **`heediq-sources` carries a `NEW_IMAGE` stream (D-133).** Like `heediq-jobs` for `job_status`, the
+  Sources stream feeds a pusher — the `heediq-ws-classification-pusher` Lambda (`WebSocketStack`) —
+  which emits `classification_ready` when the ingest worker sets `classification='pending_review'`.
+  The stream is enabled in-place on the existing table (no replacement/data loss); the event-source
+  filter narrows to that transition so approvals and other MODIFYs don't wake the pusher.

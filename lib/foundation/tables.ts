@@ -27,6 +27,10 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
     sortKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+    // DDB Streams feeds the ClassificationPusher (D-133): the ingest worker setting
+    // classification='pending_review' fans out as a `classification_ready` WS event, the same
+    // stream→pusher mechanism heediq-jobs uses for job_status (D-061/D-109).
+    stream: dynamodb.StreamViewType.NEW_IMAGE,
     removalPolicy,
   });
   // Admin list: all org sources, time-sorted
