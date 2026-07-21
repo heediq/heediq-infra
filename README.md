@@ -248,6 +248,7 @@ first registered event type, migrated unchanged from D-061.
 | WebSocket API | API Gateway WebSocket API — `$connect` / `$disconnect` / `$default` routes, stage `ws`, auto-deploy |
 | Connection Lambda | `heediq-ws-connect` — on `$connect`: validates JWT, stores `connectionId` + `userId`/`orgId`/`broadcastKey` (constant `'ALL'`) in `heediq-ws-connections`; on `$disconnect`: removes row. 29s timeout (WebSocket $connect hard limit). Real implementation is `heediq-api/src/handlers/ws-connect.ts`. |
 | Status Pusher Lambda | `heediq-ws-status-pusher` — triggered by DDB Streams (`MODIFY`) on `heediq-jobs`; builds a `job_status` envelope and pushes it at **org** scope (so every connected user in the org sees library-wide status, not just the uploader) via the shared `wsPush` library. Deletes stale connections on `GoneException`. Real implementation is `heediq-api/src/handlers/ws-pusher.ts` + `src/lib/wsPush.ts`. |
+| Classification Pusher Lambda | `heediq-ws-classification-pusher` — triggered by DDB Streams (`MODIFY`) on `heediq-sources`, **filtered** to rows where `classification` became `pending_review`; builds a `classification_ready` envelope and pushes it at **org** scope so the review card renders live (D-130/D-133). Same `grantPush`/`wsPush` mechanism as the status pusher. Real implementation is `heediq-api/src/handlers/classification-pusher.ts`. |
 | Custom domains | `ws.heediq.com` (prod) / `ws-staging.heediq.com` (staging) / `ws-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
 | `grantPush(fn)` | Reusable IAM helper (D-109) — grants `heediq-ws-connections` read/write plus `execute-api:ManageConnections` scoped to this WebSocket API's stage to any Lambda (in this stack or another) that calls `wsPush`. `ApiStack`'s main Lambda calls this directly so future features can push events without a DDB-Streams round trip. |
 
@@ -267,14 +268,14 @@ first registered event type, migrated unchanged from D-061.
 
 ### SummarizationStack resources (D-032, D-055, D-065)
 
-Source-agnostic summarization pipeline. All content types — audio transcripts, text files, PDFs, emails, Excel — enqueue to the same SQS queue. The Lambda calls the Claude API and writes structured extraction output to DynamoDB.
+Source-agnostic summarization pipeline. All content types — audio transcripts, text files, PDFs, emails, Excel — enqueue to the same SQS queue. The Lambda runs the combined **classify + extract** Claude call (D-130): it classifies the Source (Context Library Domain + placement) and extracts per-statement `ExtractedItem`s in that Domain's shape.
 
 | Resource | Details |
 |---|---|
 | SQS queue | `heediq-summarization` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
 | DLQ | `heediq-summarization-dlq` — 14-day retention; receives after 3 failed attempts |
-| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-summarization` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). |
-| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB read/write: `heediq-jobs` (status: `summarizing → done/failed`) + `heediq-sources` (structured extraction output). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
+| Lambda | `heediq-summarization` — Node.js 22, 512 MB, 300s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-summarization` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code; real implementation deployed by `heediq-worker-summarization` CI (D-043, D-050). Env includes `CONTEXTS_TABLE_NAME` + `EXTRACTED_ITEMS_TABLE_NAME` (D-130). |
+| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/summarization/*` (Claude API key, D-032). DynamoDB: read/write `heediq-jobs` (status) + `heediq-sources` (gist, classification, proposedClassification); **read** `heediq-contexts` incl. its `by-scope` GSI (classify against the uploader's Contexts, D-141); **write** `heediq-extracted-items` (per-statement items, D-135). S3 read: `heediq-audio-uploads-*` (transcript files and direct-path content). |
 
 **Message flow (D-065, D-067):**
 - Audio path: transcription worker → enqueues `{ sourceType: 'text', contentRef: sourceId, tier }` after faster-whisper completes. `tier` is forwarded from `TranscriptionJobMessage`; summarization worker uses it to select the Claude model (Haiku/Sonnet, D-067). Transcript is written to `heediq-sources[sourceId].transcript` in DynamoDB (task role has no S3 write grant); `heediq-worker-summarization` reads it back by `sourceId`
@@ -371,7 +372,7 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 
 | Table | PK | SK | GSIs | Streams |
 |---|---|---|---|---|
-| `heediq-sources` | `orgId` | `sourceId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | — |
+| `heediq-sources` | `orgId` | `sourceId` | `by-org-created` (PK=orgId SK=createdAt), `by-user-created` (PK=userId SK=createdAt) | **NEW\_IMAGE** (required for D-133 Classification Pusher Lambda trigger) |
 | `heediq-orgs` | `orgId` | — | `by-email-domain` (PK=emailDomain) | — |
 | `heediq-users` | `userId` | — | `by-org` (PK=orgId SK=userId), `by-email` (PK=email) | — |
 | `heediq-jobs` | `sourceId` | — | — | **NEW\_IMAGE** (required for D-061 Status Pusher Lambda trigger) |

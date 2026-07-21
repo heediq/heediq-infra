@@ -83,6 +83,39 @@ export class WebSocketStack extends cdk.Stack {
       }),
     );
 
+    // ── Classification Pusher Lambda — heediq-sources Stream → classification_ready (D-133) ──
+    // Second pusher, same mechanism as the jobs one: the ingest worker setting a Source's
+    // classification='pending_review' fans out as a `classification_ready` WS event so the review
+    // card renders live (D-130/D-133). Real code deployed by heediq-api CI (like the pusher above).
+    const classificationPusherFn = new lambda.Function(this, 'ClassificationPusherFn', {
+      functionName: 'heediq-ws-classification-pusher',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline('exports.handler = async () => {};'),
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        WS_CONNECTIONS_TABLE: props.foundation.wsConnectionsTable.tableName,
+      },
+    });
+
+    // Stream filter narrows to Sources that just entered the review gate — approvals
+    // (classification='approved') and other Source MODIFYs (e.g. transcript writes) are excluded,
+    // so the pusher only wakes for events it will actually emit.
+    classificationPusherFn.addEventSource(
+      new lambda_events.DynamoEventSource(props.foundation.sourcesTable, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        batchSize: 10,
+        bisectBatchOnError: true,
+        retryAttempts: 3,
+        filters: [
+          lambda.FilterCriteria.filter({
+            eventName: lambda.FilterRule.isEqual('MODIFY'),
+            dynamodb: { NewImage: { classification: { S: lambda.FilterRule.isEqual('pending_review') } } },
+          }),
+        ],
+      }),
+    );
+
     // ── WebSocket API (D-061) ──────────────────────────────────────────────────
 
     const wsApi = new apigatewayv2.CfnApi(this, 'WebSocketApi', {
@@ -141,6 +174,8 @@ export class WebSocketStack extends cdk.Stack {
     // feature's Lambda (in this stack or another) can push without repeating the wiring below.
     this.grantPush(pusherFn);
     pusherFn.addEnvironment('WS_MANAGEMENT_ENDPOINT', this.wsManagementEndpoint);
+    this.grantPush(classificationPusherFn);
+    classificationPusherFn.addEnvironment('WS_MANAGEMENT_ENDPOINT', this.wsManagementEndpoint);
 
     // ── Custom domain (D-052, D-053) ─────────────────────────────────────────
     // Cert comes from FoundationStack.wildcardCert — same workload account, same region.

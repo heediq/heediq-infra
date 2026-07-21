@@ -41,7 +41,7 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
     }
   });
 
-  it('sources table has correct key schema and 2 GSIs', () => {
+  it('sources table has correct key schema, 2 GSIs, and a NEW_IMAGE stream (D-133 pusher)', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'heediq-sources',
       KeySchema: [
@@ -52,6 +52,7 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
         Match.objectLike({ IndexName: 'by-org-created' }),
         Match.objectLike({ IndexName: 'by-user-created' }),
       ]),
+      StreamSpecification: { StreamViewType: 'NEW_IMAGE' },
     });
   });
 
