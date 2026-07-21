@@ -1,8 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
+import { createContextLibraryTables, ContextLibraryTables } from './context-library-tables';
 
-export interface FoundationTables {
+export interface FoundationTables extends ContextLibraryTables {
   sourcesTable: dynamodb.Table;
   orgsTable: dynamodb.Table;
   usersTable: dynamodb.Table;
@@ -215,6 +216,9 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
     sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
   });
 
+  // Context Library tables (D-124–D-143) — split by concern per D-103, composed here.
+  const contextLibrary = createContextLibraryTables(scope, removalPolicy);
+
   return {
     sourcesTable,
     orgsTable,
@@ -229,5 +233,6 @@ export function createTables(scope: Construct, removalPolicy: cdk.RemovalPolicy)
     groupsTable,
     roleAssignmentsTable,
     auditLogTable,
+    ...contextLibrary,
   };
 }

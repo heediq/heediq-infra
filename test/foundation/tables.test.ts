@@ -9,8 +9,8 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
     template = synthDevTemplate();
   });
 
-  it('creates 13 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 13);
+  it('creates 19 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 19);
   });
 
   it('creates the cognito-identities table keyed by sub (D-099)', () => {
@@ -180,6 +180,99 @@ describe('FoundationStack — DynamoDB tables (dev)', () => {
           ],
         }),
       ]),
+    });
+  });
+
+  // ── Context Library tables (D-124–D-143) ──────────────────────────────────────────
+
+  it('contexts table has contextId PK and a by-scope GSI keyed on scopeKey/domainCreatedAt (D-141)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-contexts',
+      KeySchema: [{ AttributeName: 'contextId', KeyType: 'HASH' }],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-scope',
+          KeySchema: [
+            { AttributeName: 'scopeKey', KeyType: 'HASH' },
+            { AttributeName: 'domainCreatedAt', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
+    });
+  });
+
+  it('extracted-items table has sourceId/itemId keys and a sparse by-context GSI (D-135)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-extracted-items',
+      KeySchema: [
+        { AttributeName: 'sourceId', KeyType: 'HASH' },
+        { AttributeName: 'itemId', KeyType: 'RANGE' },
+      ],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-context',
+          KeySchema: [
+            { AttributeName: 'contextId', KeyType: 'HASH' },
+            { AttributeName: 'itemId', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
+    });
+  });
+
+  it('decision-ledger table has contextId/entryId key schema (D-136)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-decision-ledger',
+      KeySchema: [
+        { AttributeName: 'contextId', KeyType: 'HASH' },
+        { AttributeName: 'entryId', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('conversations table has conversationId PK and a by-context GSI sorted by updatedAt (D-138)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-conversations',
+      KeySchema: [{ AttributeName: 'conversationId', KeyType: 'HASH' }],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-context',
+          KeySchema: [
+            { AttributeName: 'contextId', KeyType: 'HASH' },
+            { AttributeName: 'updatedAt', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
+    });
+  });
+
+  it('chat-messages table has conversationId/sk key schema (D-138)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-chat-messages',
+      KeySchema: [
+        { AttributeName: 'conversationId', KeyType: 'HASH' },
+        { AttributeName: 'sk', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('context-grants table has granteeUserId/contextId keys, a by-context GSI, and expiresAt TTL (D-142)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'heediq-context-grants',
+      KeySchema: [
+        { AttributeName: 'granteeUserId', KeyType: 'HASH' },
+        { AttributeName: 'contextId', KeyType: 'RANGE' },
+      ],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'by-context',
+          KeySchema: [
+            { AttributeName: 'contextId', KeyType: 'HASH' },
+            { AttributeName: 'granteeUserId', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
+      TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
     });
   });
 });
