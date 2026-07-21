@@ -131,9 +131,30 @@ describe('ApiStack (dev)', () => {
           TRANSCRIPTION_QUEUE_URL:   Match.anyValue(),
           COGNITO_USER_POOL_ID:      Match.anyValue(),
           COGNITO_CLIENT_ID:         Match.anyValue(),
+          CONTEXTS_TABLE_NAME:         Match.anyValue(),
+          EXTRACTED_ITEMS_TABLE_NAME:  Match.anyValue(),
+          DECISION_LEDGER_TABLE_NAME:  Match.anyValue(),
+          CONVERSATIONS_TABLE_NAME:    Match.anyValue(),
+          CHAT_MESSAGES_TABLE_NAME:    Match.anyValue(),
+          CONTEXT_GRANTS_TABLE_NAME:   Match.anyValue(),
         }),
       }),
     });
+  });
+
+  it('API Lambda role has read-write access to the Context Library tables (D-124–D-143, Step 4b)', () => {
+    const statements = findAllIamStatements(api);
+    for (const marker of ['ContextsTable', 'ExtractedItemsTable', 'DecisionLedgerTable', 'ConversationsTable', 'ChatMessagesTable', 'ContextGrantsTable']) {
+      const tableStatements = statements.filter((stmt: any) => {
+        const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
+        return resources.some((r: any) => JSON.stringify(r).includes(marker));
+      });
+      const actions = tableStatements.flatMap((stmt: any) =>
+        Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action],
+      );
+      expect(actions, `${marker} should have GetItem`).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:GetItem/)]));
+      expect(actions, `${marker} should have PutItem`).toEqual(expect.arrayContaining([expect.stringMatching(/dynamodb:PutItem/)]));
+    }
   });
 
   it('API Gateway has Lambda invoke permission on heediq-api', () => {
