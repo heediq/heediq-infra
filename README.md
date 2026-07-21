@@ -192,6 +192,12 @@ Fill `lib/config.ts → SHARED_SERVICES.hostedZoneId` and commit to develop.
 | `/heediq/api/groups-table-name` | `heediq-groups` (D-102) |
 | `/heediq/api/role-assignments-table-name` | `heediq-role-assignments` (D-102) |
 | `/heediq/api/audit-log-table-name` | `heediq-audit-log` (D-102) |
+| `/heediq/api/contexts-table-name` | `heediq-contexts` (D-141) |
+| `/heediq/api/extracted-items-table-name` | `heediq-extracted-items` (D-135) |
+| `/heediq/api/decision-ledger-table-name` | `heediq-decision-ledger` (D-136) |
+| `/heediq/api/conversations-table-name` | `heediq-conversations` (D-138) |
+| `/heediq/api/chat-messages-table-name` | `heediq-chat-messages` (D-138) |
+| `/heediq/api/context-grants-table-name` | `heediq-context-grants` (D-142) |
 | `/heediq/api/ws-connections-table-name` | `heediq-ws-connections` — WebSocket connection tracking (D-061) |
 | `/heediq/api/ws-management-endpoint` | API Gateway Management API endpoint (server-side `PostToConnection` calls) — consumed directly by `WebSocketStack.grantPush()` callers via CDK prop, this SSM copy is for any future out-of-account/region consumer (D-109) |
 | `/heediq/api/audio-bucket-name` | `heediq-audio-uploads-{accountId}` |
@@ -378,6 +384,19 @@ CloudFront distribution serving the React PWA from S3. Static assets are deploye
 | `heediq-groups` | `pk` | `sk` | — | — |
 | `heediq-role-assignments` | `pk` | `sk` | `by-role` (PK=`roleId`, sparse) | — |
 | `heediq-audit-log` | `pk` | `sk` | `by-user` (PK=`actorUserId` SK=`sk`) | — |
+| `heediq-contexts` | `contextId` | — | `by-scope` (PK=`scopeKey` SK=`domainCreatedAt`) | — |
+| `heediq-extracted-items` | `sourceId` | `itemId` | `by-context` (PK=`contextId` SK=`itemId`, sparse) | — |
+| `heediq-decision-ledger` | `contextId` | `entryId` | — | — |
+| `heediq-conversations` | `conversationId` | — | `by-context` (PK=`contextId` SK=`updatedAt`) | — |
+| `heediq-chat-messages` | `conversationId` | `sk` (`ts#messageId`) | — | — |
+| `heediq-context-grants` | `granteeUserId` | `contextId` | `by-context` (PK=`contextId` SK=`granteeUserId`) | TTL on `expiresAt` (cleanup only, not correctness) |
+
+The Context Library tables (`heediq-contexts` … `heediq-context-grants`, D-124–D-143) are defined in
+`lib/foundation/context-library-tables.ts` (split per D-103) — schema-only, no consumers yet. Full key
+design + access patterns + isolation gotchas: `lib/foundation/README.md`. In short: `heediq-contexts`'
+`by-scope` GSI carries a writer-materialized `scopeKey` (`U#/G#/O#`) so personal Contexts never leak
+across a member's org (D-141/D-021); `heediq-context-grants` is the regulated cross-org sharing
+primitive (D-142) whose expiry is enforced in code, not by TTL.
 
 `heediq-ws-connections` was added in FoundationStack alongside `HeediqWebSocketStack` (D-061). Deployed. Its GSIs were generalized from a single `by-source` (per-resource) index to `by-user`/`by-org`/`by-broadcast` (D-109) so any feature can address connections by user, org, or a global broadcast instead of a one-off per-resource scope.
 

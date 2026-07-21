@@ -9,7 +9,7 @@ describe('FoundationStack — SSM exports (dev)', () => {
     template = synthDevTemplate();
   });
 
-  it('exports all 19 required SSM parameters', () => {
+  it('exports all 25 required SSM parameters', () => {
     const expectedParams = [
       '/heediq/infra/cert-arn-eu-west-1',
       '/heediq/api/sources-table-name',
@@ -30,6 +30,12 @@ describe('FoundationStack — SSM exports (dev)', () => {
       '/heediq/api/groups-table-name',
       '/heediq/api/role-assignments-table-name',
       '/heediq/api/audit-log-table-name',
+      '/heediq/api/contexts-table-name',
+      '/heediq/api/extracted-items-table-name',
+      '/heediq/api/decision-ledger-table-name',
+      '/heediq/api/conversations-table-name',
+      '/heediq/api/chat-messages-table-name',
+      '/heediq/api/context-grants-table-name',
     ];
     for (const name of expectedParams) {
       template.hasResourceProperties('AWS::SSM::Parameter', { Name: name });

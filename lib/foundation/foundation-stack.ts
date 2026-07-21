@@ -40,6 +40,14 @@ export class FoundationStack extends cdk.Stack {
   readonly roleAssignmentsTable: dynamodb.Table;
   readonly auditLogTable: dynamodb.Table;
 
+  // Context Library (D-124–D-143)
+  readonly contextsTable: dynamodb.Table;
+  readonly extractedItemsTable: dynamodb.Table;
+  readonly decisionLedgerTable: dynamodb.Table;
+  readonly conversationsTable: dynamodb.Table;
+  readonly chatMessagesTable: dynamodb.Table;
+  readonly contextGrantsTable: dynamodb.Table;
+
   // S3
   readonly audioUploadsBucket: s3.Bucket;
   readonly webAssetsBucket: s3.Bucket;
@@ -74,6 +82,12 @@ export class FoundationStack extends cdk.Stack {
     this.groupsTable = tables.groupsTable;
     this.roleAssignmentsTable = tables.roleAssignmentsTable;
     this.auditLogTable = tables.auditLogTable;
+    this.contextsTable = tables.contextsTable;
+    this.extractedItemsTable = tables.extractedItemsTable;
+    this.decisionLedgerTable = tables.decisionLedgerTable;
+    this.conversationsTable = tables.conversationsTable;
+    this.chatMessagesTable = tables.chatMessagesTable;
+    this.contextGrantsTable = tables.contextGrantsTable;
 
     const storage = createStorageAndQueues(this, { removalPolicy, isProd });
     this.transcriptionQueue = storage.transcriptionQueue;
@@ -114,6 +128,12 @@ export class FoundationStack extends cdk.Stack {
       ['/heediq/api/groups-table-name',           this.groupsTable.tableName,           'DynamoDB RBAC groups table name (D-102)'],
       ['/heediq/api/role-assignments-table-name', this.roleAssignmentsTable.tableName,  'DynamoDB RBAC role-assignments table name (D-102)'],
       ['/heediq/api/audit-log-table-name',        this.auditLogTable.tableName,         'DynamoDB unified audit-log table name (D-102)'],
+      ['/heediq/api/contexts-table-name',         this.contextsTable.tableName,         'DynamoDB Context Library contexts table name (D-141)'],
+      ['/heediq/api/extracted-items-table-name',  this.extractedItemsTable.tableName,   'DynamoDB Context Library extracted-items table name (D-135)'],
+      ['/heediq/api/decision-ledger-table-name',  this.decisionLedgerTable.tableName,   'DynamoDB Context Library decision-ledger table name (D-136)'],
+      ['/heediq/api/conversations-table-name',    this.conversationsTable.tableName,    'DynamoDB Context Library conversations table name (D-138)'],
+      ['/heediq/api/chat-messages-table-name',    this.chatMessagesTable.tableName,     'DynamoDB Context Library chat-messages table name (D-138)'],
+      ['/heediq/api/context-grants-table-name',   this.contextGrantsTable.tableName,    'DynamoDB Context Library cross-org grants table name (D-142)'],
     ]);
   }
 }
