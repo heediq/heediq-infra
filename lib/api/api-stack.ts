@@ -72,6 +72,15 @@ export class ApiStack extends cdk.Stack {
         // events with no natural backing table row (unlike job_status, which stays on its
         // DDB Streams trigger in WebSocketStack).
         WS_MANAGEMENT_ENDPOINT:    props.webSocket.wsManagementEndpoint,
+        // Context Library tables (D-124–D-143) — Step 4b (Contexts CRUD/tree + review-approval)
+        // is this Lambda's first consumer; grants below cover all 6 now so Step 4c (grants +
+        // chat) doesn't need a second infra PR.
+        CONTEXTS_TABLE_NAME:         props.foundation.contextsTable.tableName,
+        EXTRACTED_ITEMS_TABLE_NAME:  props.foundation.extractedItemsTable.tableName,
+        DECISION_LEDGER_TABLE_NAME:  props.foundation.decisionLedgerTable.tableName,
+        CONVERSATIONS_TABLE_NAME:    props.foundation.conversationsTable.tableName,
+        CHAT_MESSAGES_TABLE_NAME:    props.foundation.chatMessagesTable.tableName,
+        CONTEXT_GRANTS_TABLE_NAME:   props.foundation.contextGrantsTable.tableName,
       },
     });
 
@@ -99,6 +108,16 @@ export class ApiStack extends cdk.Stack {
     props.foundation.roleAssignmentsTable.grantReadWriteData(apiFn);
     props.foundation.auditLogTable.grantWriteData(apiFn);
     props.foundation.auditLogTable.grant(apiFn, 'dynamodb:Query');
+
+    // Context Library (D-124–D-143) — Contexts CRUD/tree + review-approval (Step 4b) read/write
+    // contexts and extracted-items; decision-ledger/conversations/chat-messages/context-grants
+    // have no routes yet (Step 4c) but are granted now to avoid a second infra PR.
+    props.foundation.contextsTable.grantReadWriteData(apiFn);
+    props.foundation.extractedItemsTable.grantReadWriteData(apiFn);
+    props.foundation.decisionLedgerTable.grantReadWriteData(apiFn);
+    props.foundation.conversationsTable.grantReadWriteData(apiFn);
+    props.foundation.chatMessagesTable.grantReadWriteData(apiFn);
+    props.foundation.contextGrantsTable.grantReadWriteData(apiFn);
 
     // S3 — presigned URL creation + audio read
     props.foundation.audioUploadsBucket.grantReadWrite(apiFn);
