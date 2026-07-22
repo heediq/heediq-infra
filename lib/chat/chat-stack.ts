@@ -77,8 +77,11 @@ export class ChatStack extends cdk.Stack {
         // WS push (D-109/D-139) — this Lambda is a direct-call pusher (chat_delta/chat_complete/
         // chat_failed), same pattern as heediq-api's WS_MANAGEMENT_ENDPOINT usage. heediq-chat is a
         // separate Lambda/repo from heediq-api so it carries its own PostToConnection call, not a
-        // shared import of heediq-api's src/lib/wsPush.ts.
+        // shared import of heediq-api's src/lib/wsPush.ts — it therefore needs the connections table
+        // name directly (mirrors api-stack.ts's WS_CONNECTIONS_TABLE_NAME) to query by-user for
+        // target connectionIds; grantPush() below only grants IAM, not this env var.
         WS_MANAGEMENT_ENDPOINT:     webSocket.wsManagementEndpoint,
+        WS_CONNECTIONS_TABLE_NAME:  foundation.wsConnectionsTable.tableName,
       },
     });
 

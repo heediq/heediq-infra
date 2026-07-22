@@ -75,6 +75,19 @@ describe('ChatStack (dev)', () => {
     });
   });
 
+  it('Lambda environment includes WS_CONNECTIONS_TABLE_NAME (own WS-push, D-109/D-139)', () => {
+    // heediq-chat can't import heediq-api's src/lib/wsPush.ts (separate Lambda/repo) — it needs
+    // the connections table name directly to query by-user for target connectionIds.
+    chat.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-chat',
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({
+          WS_CONNECTIONS_TABLE_NAME: Match.anyValue(),
+        }),
+      }),
+    });
+  });
+
   // ── SQS queue + DLQ ────────────────────────────────────────────────────────
 
   it('creates SQS queue named heediq-chat', () => {
