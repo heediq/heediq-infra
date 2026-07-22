@@ -29,6 +29,14 @@ cd "$(dirname "$0")/.."
 # ---- config --------------------------------------------------
 
 GITHUB_ORG="heediq"
+# heediq org's immutable numeric id. GitHub now defaults brand-new repos to the *immutable*
+# OIDC subject format `repo:heediq@<orgId>/<repo>@<repoId>:...` instead of the legacy
+# `repo:heediq/<repo>:...`. The role trust below must accept BOTH so any new repo (e.g.
+# heediq-chat) can deploy without a per-repo trust edit. Get it from:
+#   gh api orgs/heediq/actions/oidc/customization/sub  (the @<id> in sub_claim_prefix)
+GITHUB_ORG_ID="294404675"
+# Both subject patterns, as a JSON array reused by every role trust below.
+OIDC_SUB_PATTERNS="[\"repo:${GITHUB_ORG}/*:*\", \"repo:${GITHUB_ORG}@${GITHUB_ORG_ID}/*:*\"]"
 INFRA_REPO="heediq-infra"
 REGION="eu-west-1"
 OIDC_HOST="token.actions.githubusercontent.com"
@@ -110,7 +118,7 @@ ensure_deploy_role() {
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "${OIDC_HOST}:aud": "sts.amazonaws.com" },
-      "StringLike":   { "${OIDC_HOST}:sub": "repo:${GITHUB_ORG}/*:*" }
+      "StringLike":   { "${OIDC_HOST}:sub": ${OIDC_SUB_PATTERNS} }
     }
   }]
 }
@@ -147,7 +155,7 @@ ensure_ecr_role() {
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "${OIDC_HOST}:aud": "sts.amazonaws.com" },
-      "StringLike":   { "${OIDC_HOST}:sub": "repo:${GITHUB_ORG}/*:*" }
+      "StringLike":   { "${OIDC_HOST}:sub": ${OIDC_SUB_PATTERNS} }
     }
   }]
 }
