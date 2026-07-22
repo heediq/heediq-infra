@@ -222,6 +222,16 @@ describe('ApiStack (dev)', () => {
     ]));
   });
 
+  it('API Lambda role has sqs:SendMessage on heediq-chat queue (D-138/D-139, step 4c-ii)', () => {
+    const statements = findAllIamStatements(api);
+    expect(statements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        Action: 'sqs:SendMessage',
+        Resource: expect.stringMatching(/heediq-chat/),
+      }),
+    ]));
+  });
+
   it('API Lambda role has Cognito Admin + SignUp-flow actions scoped to the User Pool ARN (D-078, D-087)', () => {
     const statements = findAllIamStatements(api);
     expect(statements).toEqual(expect.arrayContaining([
@@ -244,6 +254,17 @@ describe('ApiStack (dev)', () => {
       Environment: Match.objectLike({
         Variables: Match.objectLike({
           SUMMARIZATION_QUEUE_URL: Match.stringLikeRegexp('heediq-summarization'),
+        }),
+      }),
+    });
+  });
+
+  it('API Lambda environment includes CHAT_QUEUE_URL (D-138/D-139, step 4c-ii)', () => {
+    api.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-api',
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({
+          CHAT_QUEUE_URL: Match.stringLikeRegexp('heediq-chat'),
         }),
       }),
     });

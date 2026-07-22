@@ -58,6 +58,7 @@ export const COMPUTE = {
   lambda: {
     api:            { memoryMB: 512, timeoutSecs: 30  },
     summarization:  { memoryMB: 512, timeoutSecs: 300 },
+    chat:           { memoryMB: 512, timeoutSecs: 300 },
     // Fires on every token issuance (D-077) — must stay fast, well under Cognito's 5s trigger timeout
     authProvision:  { memoryMB: 256, timeoutSecs: 5   },
     // PreSignUp/PostConfirmation/PostAuthentication (D-087) — same 5s Cognito trigger budget

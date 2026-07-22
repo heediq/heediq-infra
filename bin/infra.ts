@@ -9,6 +9,7 @@ import { WorkloadCfCertStack } from '../lib/web/workload-cf-cert-stack';
 import { WebStack } from '../lib/web/web-stack';
 import { TranscriptionStack } from '../lib/transcription/transcription-stack';
 import { SummarizationStack } from '../lib/summarization/summarization-stack';
+import { ChatStack } from '../lib/chat/chat-stack';
 import { WebSocketStack } from '../lib/websocket/websocket-stack';
 import { ObservabilityStack } from '../lib/observability/observability-stack';
 
@@ -78,6 +79,14 @@ if (targetEnv === 'shared') {
     workloadEnv,
     terminationProtection,
     foundation,
+  });
+
+  new ChatStack(app, 'HeediqChatStack', {
+    env,
+    workloadEnv,
+    terminationProtection,
+    foundation,
+    webSocket: webSocketStack,
   });
 
   new ApiStack(app, 'HeediqApiStack', {
