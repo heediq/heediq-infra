@@ -68,6 +68,8 @@ export class ApiStack extends cdk.Stack {
         COGNITO_CLIENT_ID:         props.foundation.userPoolClient.userPoolClientId,
         // Summarization queue — direct path for non-audio sources (D-065, D-026)
         SUMMARIZATION_QUEUE_URL:   `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-summarization`,
+        // Chat queue — enqueue target for chat-turn jobs (D-138/D-139, step 4c-ii)
+        CHAT_QUEUE_URL:            `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-chat`,
         // WS push (D-109) — lets this Lambda call the shared wsPush library directly for
         // events with no natural backing table row (unlike job_status, which stays on its
         // DDB Streams trigger in WebSocketStack).
@@ -152,6 +154,16 @@ export class ApiStack extends cdk.Stack {
         actions: ['sqs:SendMessage'],
         resources: [
           `arn:aws:sqs:${this.region}:${this.account}:heediq-summarization`,
+        ],
+      }),
+    );
+
+    // SQS — enqueue chat-turn jobs to the heediq-chat queue (D-138/D-139, step 4c-ii)
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'],
+        resources: [
+          `arn:aws:sqs:${this.region}:${this.account}:heediq-chat`,
         ],
       }),
     );
