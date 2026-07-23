@@ -59,6 +59,9 @@ export const COMPUTE = {
     api:            { memoryMB: 512, timeoutSecs: 30  },
     summarization:  { memoryMB: 512, timeoutSecs: 300 },
     chat:           { memoryMB: 512, timeoutSecs: 300 },
+    // Decision Ledger reconciliation (D-148) — one prompt-cached Claude call per review-approval,
+    // same shape as chat: 512 MB, 300s. Visibility timeout on its queue must exceed this.
+    ledger:         { memoryMB: 512, timeoutSecs: 300 },
     // Fires on every token issuance (D-077) — must stay fast, well under Cognito's 5s trigger timeout
     authProvision:  { memoryMB: 256, timeoutSecs: 5   },
     // PreSignUp/PostConfirmation/PostAuthentication (D-087) — same 5s Cognito trigger budget

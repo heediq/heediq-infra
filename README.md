@@ -35,6 +35,8 @@ resources themselves.
 | `HeediqWebStack` | per env | eu-west-1 | CloudFront + S3 OAC + custom domain + security headers (D-053, D-055) |
 | `HeediqTranscriptionStack` | per env | eu-west-1 | ECS cluster + EC2 GPU Spot ASG + task defs (D-059) |
 | `HeediqSummarizationStack` | per env | eu-west-1 | Lambda (Claude extraction worker, D-065) |
+| `HeediqChatStack` | per env | eu-west-1 | SQS `heediq-chat` + Lambda (Claude context-chat worker, D-138/D-139) |
+| `HeediqLedgerStack` | per env | eu-west-1 | SQS `heediq-ledger` + Lambda (Claude Decision Ledger reconciliation worker, D-148/D-136) |
 | `HeediqWebSocketStack` | per env | eu-west-1 | WebSocket API + Status Pusher Lambda (D-061) |
 | `HeediqObservabilityStack` | per env | eu-west-1 | CloudWatch dashboard — Lambda/SQS/ECS metrics + job-stage log-funnel widget (D-085) |
 
@@ -293,6 +295,50 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | `/heediq/summarization/queue-arn` | SQS queue ARN |
 | `/heediq/infra/summarization-lambda-arn` | Lambda ARN — consumed by future orchestration |
 
+### ChatStack resources (D-138, D-139)
+
+Context-chat turn worker. `heediq-api` enqueues one job per user message; this Lambda runs the Claude turn and streams the result back over WebSocket (`chat_delta`/`chat_complete`/`chat_failed`).
+
+| Resource | Details |
+|---|---|
+| SQS queue | `heediq-chat` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
+| DLQ | `heediq-chat-dlq` — 14-day retention; receives after 3 failed attempts |
+| Lambda | `heediq-chat` — Node.js 22, 512 MB, 300s timeout. X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-chat` log group (D-093). Placeholder code; real implementation deployed by `heediq-chat` CI (D-043, D-050). Env: conversations/chat-messages/contexts/extracted-items/decision-ledger table names, `CLAUDE_SECRET_NAME`, `WS_MANAGEMENT_ENDPOINT` + `WS_CONNECTIONS_TABLE_NAME` (own WS-push, D-109). |
+| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/chat/*`. DynamoDB: read/write `heediq-conversations` + `heediq-chat-messages`; **read** `heediq-contexts` + `heediq-extracted-items` + `heediq-decision-ledger` (context memory the turn is grounded in). WS push via `grantPush()` (D-109). |
+
+**Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/chat/anthropic-api-key` — fetched at cold start, cached at module scope (D-100).
+
+**SSM params (ChatStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/chat/queue-url` | SQS queue URL — enqueue target for chat-turn jobs |
+| `/heediq/chat/queue-arn` | SQS queue ARN |
+| `/heediq/infra/chat-lambda-arn` | Lambda ARN — consumed by future orchestration |
+
+### LedgerStack resources (D-148, D-136)
+
+Decision Ledger reconciliation worker. On review-approval `heediq-api` best-effort enqueues `{ jobId, contextId, sourceId, orgId, tier }` (persist-then-review, D-148); this Lambda loads the existing ledger + this Source's kept `ExtractedItem`s, makes one prompt-cached Claude call, persists entries with computed status (`confirmed` / `needs_review` <0.5 / `open`, D-136), and pushes a `ledger_ready` WS event (D-109).
+
+| Resource | Details |
+|---|---|
+| SQS queue | `heediq-ledger` — batchSize=1 event source, 360s visibility timeout (Lambda 300s + 60s buffer), SSL enforced |
+| DLQ | `heediq-ledger-dlq` — 14-day retention; receives after 3 failed attempts |
+| Lambda | `heediq-ledger` — Node.js 22, 512 MB, 300s timeout. X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-ledger` log group (D-093). Placeholder code; real implementation deployed by `heediq-ledger` CI (D-043, D-050). Env: contexts/extracted-items/decision-ledger table names, `CLAUDE_SECRET_NAME`, `WS_MANAGEMENT_ENDPOINT` + `WS_CONNECTIONS_TABLE_NAME` (own WS-push, D-109). |
+| IAM: Lambda role | `secretsmanager:GetSecretValue` on `/heediq/ledger/*`. DynamoDB: **read** `heediq-contexts` + `heediq-extracted-items`; **read/write** `heediq-decision-ledger` (the ledger this worker maintains). WS push via `grantPush()` (D-109). |
+
+**Pre-deployment secret required (per workload account):** `Secrets Manager /heediq/ledger/anthropic-api-key` — fetched at cold start, cached at module scope (D-100). Must exist before the first `heediq-ledger` Lambda invocation.
+
+**Cross-stack IAM (no CDK dependency required):** `heediq-ledger` queue ARN is deterministic (`arn:aws:sqs:{region}:{account}:heediq-ledger`) — ApiStack Lambda role receives `sqs:SendMessage` using the constructed ARN and `LEDGER_QUEUE_URL` as an env var.
+
+**SSM params (LedgerStack):**
+
+| SSM path | Value |
+|---|---|
+| `/heediq/ledger/queue-url` | SQS queue URL — enqueue target for review-time reconciliation jobs |
+| `/heediq/ledger/queue-arn` | SQS queue ARN |
+| `/heediq/infra/ledger-lambda-arn` | Lambda ARN — consumed by future orchestration |
+
 ### ApiStack resources (D-034, D-041, D-042, D-052)
 
 | Resource | Details |
@@ -300,7 +346,7 @@ Source-agnostic summarization pipeline. All content types — audio transcripts,
 | API Lambda | `heediq-api` — Node.js 22, 512 MB, 30s timeout (D-055). X-Ray active tracing (D-085). Explicit `/aws/lambda/heediq-api` log group, 30-day retention dev/staging / 90-day prod (D-093). Placeholder code in stack; real implementation deployed by `heediq-api` CI (D-043, D-050). |
 | HTTP API | API Gateway HTTP API `heediq-api` — `$default` stage, auto-deploy. Catch-all route `ANY /{proxy+}` → Lambda via AWS_PROXY (payload format 2.0). CORS: web domain per env + `localhost:5173` in dev. JWT validation in Hono middleware, not at Gateway (D-041). Stage-level default throttling (burst 50 / rate 20 req/s) in every environment (D-097) — applies globally since the API is one catch-all route. |
 | Custom domains | `api.heediq.com` (prod) / `api-staging.heediq.com` (staging) / `api-dev.heediq.com` (dev) — wildcard cert from `FoundationStack.wildcardCert` (same workload account, D-063) |
-| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087), **rate-limits** (D-097), **roles/groups/role-assignments** (D-102); write-only: **audit-log** (D-102); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
+| IAM: Lambda role | DynamoDB read/write: sources, orgs, users, jobs, **user-auth-methods** (D-087), **auth-audit-log** (write-only, D-087), **rate-limits** (D-097), **roles/groups/role-assignments** (D-102); write-only: **audit-log** (D-102); read-only: ws-connections. S3 read/write: audioUploadsBucket (presigned URLs + audio read). SQS send: transcriptionQueue + **summarizationQueue** (D-065) + **chatQueue** (D-138) + **ledgerQueue** (D-148, best-effort on review-approval). `secretsmanager:GetSecretValue` on `/heediq/api/*`. `sts:AssumeRole` on `heediq-ses-email-sending` (D-058). |
 | WAF (scaffolded, off by default) | Regional `CfnWebACL` rate-based rule (500 req/5min per IP, `aggregateKeyType: IP`) + `CfnWebACLAssociation` to the HTTP API stage — code-gated behind a per-env `ENABLE_WAF` flag defaulting to `false` in dev/staging/prod. Deliberately not deployed active anywhere yet; flip the flag before a marketing campaign or expected traffic spike (D-098) rather than building it from scratch then. |
 
 **SSM params (ApiStack):**

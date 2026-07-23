@@ -70,6 +70,8 @@ export class ApiStack extends cdk.Stack {
         SUMMARIZATION_QUEUE_URL:   `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-summarization`,
         // Chat queue — enqueue target for chat-turn jobs (D-138/D-139, step 4c-ii)
         CHAT_QUEUE_URL:            `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-chat`,
+        // Ledger queue — best-effort enqueue target on review-approval (D-148, step 6)
+        LEDGER_QUEUE_URL:          `https://sqs.${this.region}.amazonaws.com/${this.account}/heediq-ledger`,
         // WS push (D-109) — lets this Lambda call the shared wsPush library directly for
         // events with no natural backing table row (unlike job_status, which stays on its
         // DDB Streams trigger in WebSocketStack).
@@ -164,6 +166,17 @@ export class ApiStack extends cdk.Stack {
         actions: ['sqs:SendMessage'],
         resources: [
           `arn:aws:sqs:${this.region}:${this.account}:heediq-chat`,
+        ],
+      }),
+    );
+
+    // SQS — enqueue reconciliation jobs to the heediq-ledger queue on review-approval (D-148,
+    // step 6). Best-effort producer: the review commit stays authoritative even if this fails.
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage'],
+        resources: [
+          `arn:aws:sqs:${this.region}:${this.account}:heediq-ledger`,
         ],
       }),
     );

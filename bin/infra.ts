@@ -10,6 +10,7 @@ import { WebStack } from '../lib/web/web-stack';
 import { TranscriptionStack } from '../lib/transcription/transcription-stack';
 import { SummarizationStack } from '../lib/summarization/summarization-stack';
 import { ChatStack } from '../lib/chat/chat-stack';
+import { LedgerStack } from '../lib/ledger/ledger-stack';
 import { WebSocketStack } from '../lib/websocket/websocket-stack';
 import { ObservabilityStack } from '../lib/observability/observability-stack';
 
@@ -82,6 +83,14 @@ if (targetEnv === 'shared') {
   });
 
   new ChatStack(app, 'HeediqChatStack', {
+    env,
+    workloadEnv,
+    terminationProtection,
+    foundation,
+    webSocket: webSocketStack,
+  });
+
+  new LedgerStack(app, 'HeediqLedgerStack', {
     env,
     workloadEnv,
     terminationProtection,
