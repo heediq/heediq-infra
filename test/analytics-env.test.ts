@@ -82,6 +82,8 @@ describe('server-analytics env wiring — enabled (-c analytics=true)', () => {
     // performs a live SSM GetParameter.
     const params = foundation.findParameters('*', { Type: 'AWS::SSM::Parameter::Value<String>' });
     const names = Object.values(params).map((p) => p.Default);
-    expect(names).toContain('/heediq/api/amplitude-api-key');
+    // Shared neutral param — one Amplitude project key for both web + server so the D-154
+    // cross-service join resolves (not a side-owned /heediq/web/ or /heediq/api/ key).
+    expect(names).toContain('/heediq/analytics/amplitude-api-key');
   });
 });
