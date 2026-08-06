@@ -3,6 +3,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 import { COMPUTE } from '../config';
 import type { FoundationTables } from './tables';
+import { amplitudeApiKeyEnv } from '../shared/analytics-env';
 
 // ── Auth provisioning Lambda trigger (D-077) ──────────────────────────────
 // Fires on every token issuance (native email/password AND federated Google/Microsoft —
@@ -28,6 +29,10 @@ export function createAuthProvisionFn(scope: Construct, tables: FoundationTables
       ROLES_TABLE_NAME: tables.rolesTable.tableName,
       GROUPS_TABLE_NAME: tables.groupsTable.tableName,
       ROLE_ASSIGNMENTS_TABLE_NAME: tables.roleAssignmentsTable.tableName,
+      // Emits the server-side `user_provisioned` analytics event on new-org provisioning (D-154).
+      // Optional per env + fail-safe/latency-bounded in the helper, so it can't jeopardise this
+      // login-critical trigger; absent key → clean no-op.
+      ...amplitudeApiKeyEnv(scope),
     },
   });
   tables.orgsTable.grantReadWriteData(authProvisionFn);

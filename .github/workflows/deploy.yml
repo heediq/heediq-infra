@@ -83,7 +83,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy to dev
-        run: pnpm cdk deploy --all -c env=dev --require-approval never
+        # `-c analytics=true` enables the D-154 server-side analytics choke-point in dev (wires
+        # AMPLITUDE_API_KEY onto the 3 emitting Lambdas from the shared /heediq/analytics/amplitude-api-key
+        # SSM param — the same key heediq-web uses). Dev-only for now — staging/prod stay opt-out
+        # (no flag → clean no-op) until deliberately enabled and their param is confirmed provisioned.
+        run: pnpm cdk deploy --all -c env=dev -c analytics=true --require-approval never
 
   deploy-staging:
     name: Deploy → staging
