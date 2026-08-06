@@ -5,6 +5,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 import { COMPUTE } from '../config';
 import type { FoundationTables } from './tables';
+import { amplitudeApiKeyEnv } from '../shared/analytics-env';
 
 // ── Cross-provider account-linking triggers (D-087) ───────────────────────
 // Replicates EmotiXOrg/emotix-infra's proven pattern: explicit Lambda triggers (not
@@ -58,6 +59,10 @@ export function createAuthLinkingTriggers(
       USER_AUTH_METHODS_TABLE_NAME: tables.userAuthMethodsTable.tableName,
       AUTH_AUDIT_LOG_TABLE_NAME: tables.authAuditLogTable.tableName,
       COGNITO_IDENTITIES_TABLE_NAME: tables.cognitoIdentitiesTable.tableName,
+      // Emits the server-side `login_completed` analytics event on each successful sign-in (D-154).
+      // Optional per env + fail-safe/latency-bounded, so it can't jeopardise this login-critical
+      // trigger; absent key → clean no-op.
+      ...amplitudeApiKeyEnv(scope),
     },
   });
 

@@ -9,6 +9,7 @@ import { Construct } from 'constructs';
 import { WorkloadEnv, DOMAINS, ACCOUNTS, SHARED_SERVICES } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
 import { Route53AliasRecord } from '../shared/route53-alias-record';
+import { amplitudeApiKeyEnv } from '../shared/analytics-env';
 
 export interface WebSocketStackProps extends cdk.StackProps {
   workloadEnv: WorkloadEnv;
@@ -63,11 +64,18 @@ export class WebSocketStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(60),
       environment: {
         WS_CONNECTIONS_TABLE: props.foundation.wsConnectionsTable.tableName,
+        // On a terminal job status the pusher looks up the source's uploader to emit the
+        // server-side `source_processing_completed` analytics event (D-154). Read-only, and the
+        // Amplitude key is optional per env — absent → the emit cleanly no-ops.
+        SOURCES_TABLE_NAME: props.foundation.sourcesTable.tableName,
+        ...amplitudeApiKeyEnv(this),
       },
     });
 
     // Table read/write + ManageConnections granted below via grantPush() (D-109) — queries
     // by-org GSI (job_status pushes at org scope); deletes stale connections on GoneException.
+    // Read-only on sources for the analytics uploader lookup above.
+    props.foundation.sourcesTable.grantReadData(pusherFn);
 
     // DDB Streams trigger — every MODIFY event on heediq-jobs fans out to connected clients
     pusherFn.addEventSource(
