@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 
@@ -28,8 +27,11 @@ export function createStorageAndQueues(scope: Construct, props: FoundationStorag
 
   const transcriptionQueue = new sqs.Queue(scope, 'TranscriptionQueue', {
     queueName: 'heediq-transcription',
-    // Covers longest expected paid-tier job (large-v3 + pyannote on CPU, 60-min source)
-    visibilityTimeout: cdk.Duration.seconds(3600),
+    // Consumed by the dispatcher Lambda (D-157), which returns in ms after handing the job to
+    // ECS RunTask — the message is not held for the job's duration. Visibility only needs to
+    // exceed the dispatcher's 30s timeout so a failed dispatch retries (→ DLQ after 3 attempts)
+    // rather than double-running. 90s gives headroom without a long retry stall.
+    visibilityTimeout: cdk.Duration.seconds(90),
     deadLetterQueue: { queue: transcriptionDlq, maxReceiveCount: 3 },
     enforceSSL: true,
   });
@@ -73,12 +75,6 @@ export function createStorageAndQueues(scope: Construct, props: FoundationStorag
     removalPolicy,
     autoDeleteObjects: !isProd,
   });
-
-  // All OBJECT_CREATED events → SQS; Fargate worker filters by file extension
-  audioUploadsBucket.addEventNotification(
-    s3.EventType.OBJECT_CREATED,
-    new s3n.SqsDestination(transcriptionQueue),
-  );
 
   // CloudFront origin; WebStack OAC
   const webAssetsBucket = new s3.Bucket(scope, 'WebAssetsBucket', {

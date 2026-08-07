@@ -279,20 +279,7 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  it('creates pipe role trusted by pipes.amazonaws.com', () => {
-    template.hasResourceProperties('AWS::IAM::Role', {
-      RoleName: 'heediq-transcription-pipe',
-      AssumeRolePolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Principal: { Service: 'pipes.amazonaws.com' },
-          }),
-        ]),
-      }),
-    });
-  });
-
-  it('pipe role policy includes ecs:RunTask and iam:PassRole', () => {
+  it('dispatcher Lambda role policy includes ecs:RunTask and iam:PassRole (D-157)', () => {
     template.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -337,85 +324,65 @@ describe('TranscriptionStack', () => {
     });
   });
 
-  // ── EventBridge Pipes ───────────────────────────────────────────────────────
+  // ── Dispatcher Lambda (D-157) ────────────────────────────────────────────────
 
-  it('creates 2 EventBridge Pipes', () => {
-    template.resourceCountIs('AWS::Pipes::Pipe', 2);
+  it('retires EventBridge Pipes entirely — no Pipe resources remain', () => {
+    template.resourceCountIs('AWS::Pipes::Pipe', 0);
   });
 
-  it('creates free-tier pipe named heediq-transcription-free', () => {
-    template.hasResourceProperties('AWS::Pipes::Pipe', {
-      Name: 'heediq-transcription-free',
+  it('creates the dispatcher Lambda on the Node 22 runtime', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-transcription-dispatcher',
+      Runtime: 'nodejs22.x',
+      Handler: 'index.handler',
     });
   });
 
-  it('creates paid-tier pipe named heediq-transcription-paid', () => {
-    template.hasResourceProperties('AWS::Pipes::Pipe', {
-      Name: 'heediq-transcription-paid',
-    });
-  });
-
-  it('both pipes use an EC2 capacity provider strategy with weight 1 (D-059)', () => {
-    // CapacityProvider is a CDK Ref token (resolves to 'heediq-transcription-ec2' at deploy).
-    // We assert the strategy structure and weight; the separate capacity provider test
-    // confirms the provider is named heediq-transcription-ec2.
-    template.allResourcesProperties('AWS::Pipes::Pipe', {
-      TargetParameters: Match.objectLike({
-        EcsTaskParameters: Match.objectLike({
-          CapacityProviderStrategy: Match.arrayWith([
-            Match.objectLike({ CapacityProvider: Match.anyValue(), Weight: 1 }),
-          ]),
+  it('dispatcher Lambda gets the cluster, capacity provider, container name, and both task-def families as env vars', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'heediq-transcription-dispatcher',
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({
+          CONTAINER_NAME: 'heediq-transcription-worker',
+          FREE_TASK_DEF_FAMILY: 'heediq-transcription-free',
+          PAID_TASK_DEF_FAMILY: 'heediq-transcription-paid',
+          // CAPACITY_PROVIDER resolves to a Ref token at synth (deploy-time name); the separate
+          // capacity-provider test confirms it renders as heediq-transcription-ec2.
+          CAPACITY_PROVIDER: Match.anyValue(),
         }),
       }),
     });
   });
 
-  it('pipes have no networkConfiguration — bridge-mode EC2 tasks share host network', () => {
-    template.allResourcesProperties('AWS::Pipes::Pipe', {
-      TargetParameters: Match.objectLike({
-        EcsTaskParameters: Match.objectLike({
-          // NetworkConfiguration must be absent — asserting the key is not present
-          NetworkConfiguration: Match.absent(),
-        }),
+  it('dispatcher Lambda is triggered by the transcription queue with partial-batch reporting', () => {
+    template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      BatchSize: 1,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      EventSourceArn: Match.objectLike({
+        'Fn::ImportValue': Match.stringLikeRegexp('TranscriptionQueue'),
       }),
     });
   });
 
-  it('both pipes batch size is 1 — one job per EC2 task', () => {
-    template.allResourcesProperties('AWS::Pipes::Pipe', {
-      SourceParameters: Match.objectLike({
-        SqsQueueParameters: { BatchSize: 1 },
+  it('dispatcher ecs:RunTask is scoped to both task-def families by name, any revision (:*)', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'ecs:RunTask',
+            Resource: Match.arrayWith([
+              Match.stringLikeRegexp('task-definition/heediq-transcription-free:\\*'),
+              Match.stringLikeRegexp('task-definition/heediq-transcription-paid:\\*'),
+            ]),
+          }),
+        ]),
       }),
     });
   });
 
-  it('free-tier pipe filter matches tier=free message attribute', () => {
-    template.hasResourceProperties('AWS::Pipes::Pipe', {
-      Name: 'heediq-transcription-free',
-      SourceParameters: Match.objectLike({
-        FilterCriteria: Match.objectLike({
-          Filters: Match.arrayWith([
-            Match.objectLike({
-              Pattern: Match.stringLikeRegexp('"stringValue":\\["free"\\]'),
-            }),
-          ]),
-        }),
-      }),
-    });
-  });
-
-  it('paid-tier pipe filter matches tier=paid message attribute', () => {
-    template.hasResourceProperties('AWS::Pipes::Pipe', {
-      Name: 'heediq-transcription-paid',
-      SourceParameters: Match.objectLike({
-        FilterCriteria: Match.objectLike({
-          Filters: Match.arrayWith([
-            Match.objectLike({
-              Pattern: Match.stringLikeRegexp('"stringValue":\\["paid"\\]'),
-            }),
-          ]),
-        }),
-      }),
+  it('publishes the dispatcher function name to SSM', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/heediq/transcription/dispatcher-function-name',
     });
   });
 });
