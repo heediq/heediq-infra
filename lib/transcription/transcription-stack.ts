@@ -3,9 +3,11 @@ import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
-import * as pipes from 'aws-cdk-lib/aws-pipes';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as path from 'path';
 import { Construct } from 'constructs';
 import { WorkloadEnv, COMPUTE, ACCOUNTS, AWS_REGION, logRetentionFor } from '../config';
 import { FoundationStack } from '../foundation/foundation-stack';
@@ -123,9 +125,9 @@ export class TranscriptionStack extends cdk.Stack {
       }),
     );
 
-    // SQS — re-enqueue to the transcription queue on Spot interruption (D-066). EventBridge
-    // Pipes (not the worker) consumes heediq-transcription and deletes the message as soon as
-    // it hands the job to RunTask, so the worker must explicitly re-send on SIGTERM instead of
+    // SQS — re-enqueue to the transcription queue on Spot interruption (D-066). The dispatcher
+    // Lambda (not the worker) consumes heediq-transcription and the message is deleted as soon as
+    // the job is handed to RunTask, so the worker must explicitly re-send on SIGTERM instead of
     // relying on visibility-timeout expiry.
     taskRole.addToPolicy(
       new iam.PolicyStatement({
@@ -139,7 +141,9 @@ export class TranscriptionStack extends cdk.Stack {
     // at most one task runs per g4dn.xlarge instance (1 GPU per instance).
     // Two separate images, one per tier — each has only its tier's model baked in at build
     // time (D-062). `family` is explicit so CI can target task-definition revisions by name
-    // when promoting a new image (describe → patch image → register → update the Pipe target).
+    // when promoting a new image (describe → patch image → register). The dispatcher Lambda
+    // runs tasks by family (D-157), so it always picks up the latest ACTIVE revision — no
+    // infra redeploy on image promotion.
     const ecrRepoUri = `${ACCOUNTS.sharedServices}.dkr.ecr.${AWS_REGION}.amazonaws.com/heediq-worker-transcription`;
 
     // Per-environment, per-tier image tag — externally owned by CI (deploy.yml), NOT by CDK.
@@ -263,81 +267,71 @@ export class TranscriptionStack extends cdk.Stack {
     });
     cluster.addAsgCapacityProvider(capacityProvider);
 
-    // ── IAM: EventBridge Pipes role ────────────────────────────────────────────
-    const pipeRole = new iam.Role(this, 'PipeRole', {
-      roleName: 'heediq-transcription-pipe',
-      assumedBy: new iam.ServicePrincipal('pipes.amazonaws.com'),
+    // ── Dispatcher Lambda (D-157) — SQS → ECS RunTask on EC2 GPU Spot ──────────
+    // Single consumer of heediq-transcription. Reads `tier` from the message body and runs the
+    // matching task-definition family, on the GPU Spot capacity provider. Replaces the two
+    // EventBridge Pipes that competed on one queue with complementary `tier` filters — a design
+    // where the losing Pipe silently deleted the message (Pipes drops filter-rejected messages
+    // with no error and no DLQ). Routing now lives in code: one queue, one consumer, one DLQ.
+    const dispatcherLogGroup = new logs.LogGroup(this, 'DispatcherLogGroup', {
+      logGroupName: '/aws/lambda/heediq-transcription-dispatcher',
+      retention: logRetentionFor(props.workloadEnv),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // SQS: receive + delete + get-attributes (pipe manages message lifecycle)
-    foundation.transcriptionQueue.grantConsumeMessages(pipeRole);
+    const dispatcher = new lambda.Function(this, 'Dispatcher', {
+      functionName: 'heediq-transcription-dispatcher',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'dispatcher'), {
+        exclude: ['README.md'],
+      }),
+      memorySize: COMPUTE.lambda.transcriptionDispatcher.memoryMB,
+      timeout: cdk.Duration.seconds(COMPUTE.lambda.transcriptionDispatcher.timeoutSecs),
+      tracing: lambda.Tracing.ACTIVE,
+      logGroup: dispatcherLogGroup,
+      environment: {
+        CLUSTER_ARN: cluster.clusterArn,
+        CAPACITY_PROVIDER: capacityProvider.capacityProviderName,
+        CONTAINER_NAME: 'heediq-transcription-worker',
+        FREE_TASK_DEF_FAMILY: freeTierTaskDef.family,
+        PAID_TASK_DEF_FAMILY: paidTierTaskDef.family,
+      },
+    });
 
-    pipeRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ['ecs:RunTask'],
-        resources: [freeTierTaskDef.taskDefinitionArn, paidTierTaskDef.taskDefinitionArn],
+    // SQS trigger — batchSize 1 (one RunTask per job) with partial-batch responses so a failed
+    // dispatch retries via the queue and, after maxReceiveCount, lands in heediq-transcription-dlq
+    // (the event source also grants the Lambda ReceiveMessage/DeleteMessage/GetQueueAttributes).
+    dispatcher.addEventSource(
+      new lambdaEventSources.SqsEventSource(foundation.transcriptionQueue, {
+        batchSize: 1,
+        reportBatchItemFailures: true,
       }),
     );
 
-    // PassRole so the RunTask call can attach both roles to the ECS task
-    pipeRole.addToPolicy(
+    // ecs:RunTask scoped to both families (`:*` = any revision — the Lambda runs by family so it
+    // resolves the latest ACTIVE revision at call time).
+    dispatcher.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ecs:RunTask'],
+        resources: [
+          `arn:aws:ecs:${AWS_REGION}:${ACCOUNTS[props.workloadEnv]}:task-definition/heediq-transcription-free:*`,
+          `arn:aws:ecs:${AWS_REGION}:${ACCOUNTS[props.workloadEnv]}:task-definition/heediq-transcription-paid:*`,
+        ],
+      }),
+    );
+
+    // PassRole so the RunTask call can attach both roles to the ECS task.
+    dispatcher.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['iam:PassRole'],
         resources: [executionRole.roleArn, taskRole.roleArn],
       }),
     );
 
-    // ── EventBridge Pipes (D-023, D-059) — SQS → ECS RunTask on EC2 GPU Spot ──
-    // Two pipes, one per tier, each filtered on the 'tier' SQS message attribute.
-    // The API sets messageAttributes.tier = 'free' | 'paid' when enqueuing a job.
-    // No launchType field — capacityProviderStrategy takes precedence (AWS requirement).
-    // No networkConfiguration — bridge-mode EC2 tasks share the host network; awsvpcConfiguration
-    // only applies to awsvpc-mode tasks.
-    const tierPipes: Array<['free' | 'paid', ecs.Ec2TaskDefinition]> = [
-      ['free', freeTierTaskDef],
-      ['paid', paidTierTaskDef],
-    ];
-
-    for (const [tier, taskDef] of tierPipes) {
-      const capitalized = (tier.charAt(0).toUpperCase() + tier.slice(1)) as 'Free' | 'Paid';
-
-      new pipes.CfnPipe(this, `${capitalized}TierPipe`, {
-        name: `heediq-transcription-${tier}`,
-        roleArn: pipeRole.roleArn,
-        source: foundation.transcriptionQueue.queueArn,
-        sourceParameters: {
-          sqsQueueParameters: { batchSize: 1 },
-          filterCriteria: {
-            filters: [
-              {
-                pattern: JSON.stringify({
-                  messageAttributes: { tier: { stringValue: [tier] } },
-                }),
-              },
-            ],
-          },
-        },
-        target: cluster.clusterArn,
-        targetParameters: {
-          // Job data reaches the container only through this override — the worker has no SQS
-          // client of its own (one RunTask = one job, D-066). `<$.body>` is a Pipes dynamic path
-          // reference to the raw SQS message body of the event that triggered this RunTask.
-          ecsTaskParameters: {
-            taskDefinitionArn: taskDef.taskDefinitionArn,
-            capacityProviderStrategy: [
-              { capacityProvider: capacityProvider.capacityProviderName, weight: 1 },
-            ],
-            overrides: {
-              containerOverrides: [
-                {
-                  name: 'heediq-transcription-worker',
-                  environment: [{ name: 'SQS_MESSAGE_BODY', value: '<$.body>' }],
-                },
-              ],
-            },
-          },
-        },
-      });
-    }
+    new ssm.StringParameter(this, 'DispatcherFunctionNameParam', {
+      parameterName: '/heediq/transcription/dispatcher-function-name',
+      stringValue: dispatcher.functionName,
+    });
   }
 }

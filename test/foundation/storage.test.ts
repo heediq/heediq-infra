@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from 'vitest';
+import { describe, it, beforeAll, expect } from 'vitest';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { synthDevTemplate } from './test-utils';
 
@@ -9,10 +9,10 @@ describe('FoundationStack — SQS & S3 (dev)', () => {
     template = synthDevTemplate();
   });
 
-  it('creates transcription queue with 1h visibility timeout and DLQ', () => {
+  it('creates transcription queue with a 90s visibility timeout (> dispatcher Lambda timeout, D-157) and DLQ', () => {
     template.hasResourceProperties('AWS::SQS::Queue', {
       QueueName: 'heediq-transcription',
-      VisibilityTimeout: 3600,
+      VisibilityTimeout: 90,
       RedrivePolicy: Match.objectLike({ maxReceiveCount: 3 }),
     });
   });
@@ -55,19 +55,18 @@ describe('FoundationStack — SQS & S3 (dev)', () => {
     });
   });
 
-  it('audio bucket SQS notification — queue policy allows s3.amazonaws.com to send', () => {
-    // CDK wires S3→SQS via a Lambda-backed custom resource; the verifiable contract is
-    // the SQS queue policy granting s3.amazonaws.com SendMessage access.
-    template.hasResourceProperties('AWS::SQS::QueuePolicy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: Match.arrayWith(['sqs:SendMessage']),
-            Principal: Match.objectLike({ Service: 's3.amazonaws.com' }),
-          }),
-        ]),
-      }),
-    });
+  it('audio bucket has no S3→SQS notification — ingestion is API-driven, not bucket-event-driven (D-157)', () => {
+    // The pre-D-023 S3 OBJECT_CREATED → transcription-queue notification was removed: audio jobs
+    // are enqueued by the API after upload, never by a raw bucket event. No S3-principal grant
+    // should remain on the queue.
+    const queuePolicies = template.findResources('AWS::SQS::QueuePolicy');
+    const statements = Object.values(queuePolicies).flatMap(
+      (p) => p.Properties?.PolicyDocument?.Statement ?? [],
+    );
+    const s3Grants = statements.filter(
+      (s: { Principal?: { Service?: unknown } }) => s.Principal?.Service === 's3.amazonaws.com',
+    );
+    expect(s3Grants).toHaveLength(0);
   });
 
   it('web-assets bucket policy allows cloudfront.amazonaws.com with source-account condition (OAC)', () => {

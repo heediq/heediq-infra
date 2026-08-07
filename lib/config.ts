@@ -66,6 +66,9 @@ export const COMPUTE = {
     authProvision:  { memoryMB: 256, timeoutSecs: 5   },
     // PreSignUp/PostConfirmation/PostAuthentication (D-087) — same 5s Cognito trigger budget
     authTrigger:    { memoryMB: 256, timeoutSecs: 5   },
+    // Transcription dispatcher (D-157) — one SQS→ECS RunTask call per job, pure glue.
+    // Queue visibility timeout must exceed this so a failed dispatch retries, not double-runs.
+    transcriptionDispatcher: { memoryMB: 128, timeoutSecs: 30 },
   },
   // D-059: EC2 GPU Spot (g4dn.xlarge). One ASG, one capacity provider — both tiers share the pool.
   // Model choice (free=small / paid=large-v3+pyannote) is enforced at API layer (D-060).
